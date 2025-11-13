@@ -1,0 +1,44 @@
+cookie:
+  expiry_days: 1
+  key: # To be filled with any string
+  name: # To be filled with any string
+credentials:
+  usernames:
+
+    Rafael:
+      email: rafael.aguiar@synvia.com
+      failed_login_attempts: 0 # Will be managed automatically
+      first_name: Rafael
+      last_name: Aguiar
+      logged_in: False # Will be managed automatically
+      password: Teste123 # Will be hashed automatically
+      cargo: Gerente
+      roles: # Optional
+      - admin
+      - editor
+      - viewer
+
+    rbriggs:
+      email: jessica.beatto@synvia.com
+      failed_login_attempts: 0 # Will be managed automatically
+      first_name: Jessica
+      last_name: Beatto
+      logged_in: False # Will be managed automatically
+      password: Teste123 # Will be hashed automatically
+      roles: # Optional
+      - viewer
+      
+oauth2: # Optional
+  google: # Follow instructions: https://developers.google.com/identity/protocols/oauth2
+    client_id: # To be filled
+    client_secret: # To be filled
+    redirect_uri: # URL to redirect to after OAuth2 authentication
+  microsoft: # Follow instructions: https://learn.microsoft.com/en-us/graph/auth-register-app-v2
+    client_id: # To be filled
+    client_secret: # To be filled
+    redirect_uri: # URL to redirect to after OAuth2 authentication
+    tenant_id: # To be filled
+pre-authorized: # Optional
+  emails:
+  - melsby@gmail.com
+api_key: # Optional - register to receive a free API key: https://stauthenticator.com
