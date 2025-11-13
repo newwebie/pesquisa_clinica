@@ -19,7 +19,6 @@ import json
 from pathlib import Path
 from urllib.parse import urlencode
 from typing import Optional
-
 import streamlit as st
 import yaml
 from yaml.loader import SafeLoader
