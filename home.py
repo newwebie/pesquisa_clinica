@@ -2,33 +2,28 @@
 # Dependências:
 #   pip install streamlit msal pyyaml streamlit-authenticator
 #
-# Configuração necessária (será enviado em seguida):
-# - OAuth2 Microsoft (TENANT / CLIENT / SECRET / REDIRECT) em st.secrets["microsoft"]
+# Configuração necessária:
+# - OAuth2 Microsoft em st.secrets["auth"]  (client_id / client_secret / tenant_id / redirect_uri_local / redirect_uri_prod / scope)
+#   (seus valores antigos em st.secrets["microsoft"] devem ser migrados para "auth")
 # - Usuários locais (username/senha/roles/cargo/email) em config.yaml
 #
 # O que este arquivo faz:
-# 1) Mostra o botão principal: "Entrar com Microsoft" (SSO corporativo via MSAL)
-# 2) Mostra um botão secundário: "Entrar com usuário e senha" (abre UI do streamlit-authenticator)
-# 3) Após autenticar, padroniza st.session_state["author"] com {username, name, email, cargo, perfil, roles, source}
-# 4) Redireciona conforme perfil: administrador/editor/visualizador
+# 1) Mostra Microsoft SSO estilizado vindo do módulo (create_login_page)
+# 2) Mostra fallback Usuário/Senha (streamlit-authenticator)
+# 3) Após autenticar, padroniza st.session_state["author"] = {username, name, email, cargo, perfil, roles, source}
+# 4) Redireciona por perfil
 
 from __future__ import annotations
 
+# ===== IMPORTA O SEU MÓDULO =====
+from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
 import os
-import json
 from pathlib import Path
-from urllib.parse import urlencode
-from typing import Optional
+from typing import Optional, Dict, Any
 import streamlit as st
 import yaml
 from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
-
-# MSAL só é necessário se o usuário clicar em Microsoft
-try:
-    from msal import ConfidentialClientApplication
-except Exception:  # pragma: no cover
-    ConfidentialClientApplication = None
 
 # -----------------------------------------------------
 # Config da página
@@ -45,7 +40,6 @@ DESTINO_POR_PERFIL = {
     "visualizador": "Home.py",
 }
 DEFAULT_PAGE = "Home.py"
-
 
 def _go(destino: str):
     """Redireciona para uma página do Streamlit."""
@@ -75,13 +69,11 @@ def _go(destino: str):
         st.success(f"Login efetuado. Abra a página **{destino}** no menu à esquerda.")
         st.stop()
 
-
 def _first_nonempty(*vals):
     for v in vals:
         if v and str(v).strip():
             return str(v).strip()
     return None
-
 
 # -----------------------------------------------------
 # Carregar config.yaml (usuários locais)
@@ -94,100 +86,45 @@ def load_config_yaml() -> dict:
     with open(cfg_path, "r", encoding="utf-8") as f:
         return yaml.load(f, Loader=SafeLoader) or {}
 
-
 # -----------------------------------------------------
-# Microsoft OAuth (MSAL)
+# Funções de mapeamento Microsoft → author (PADRÃO DO SEU APP)
 # -----------------------------------------------------
-@st.cache_resource(show_spinner=False)
-def get_msal_app():
-    ms = st.secrets.get("microsoft", {})
-    tenant = ms.get("tenant_id")
-    client_id = ms.get("client_id")
-    client_secret = ms.get("client_secret")
-    authority = f"https://login.microsoftonline.com/{tenant}"
-    if not (tenant and client_id and client_secret):
-        raise RuntimeError("Config Microsoft incompleta em st.secrets['microsoft'].")
-    if ConfidentialClientApplication is None:
-        raise RuntimeError("Pacote 'msal' não encontrado. Instale com: pip install msal")
-    return ConfidentialClientApplication(client_id, authority=authority, client_credential=client_secret)
+def _graph_to_author(user_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Converte o payload do Microsoft Graph /me no formato padronizado do app:
+    {username, name, email, cargo, perfil, roles, source}
+    """
+    email = user_info.get("mail") or user_info.get("userPrincipalName")
+    name = user_info.get("displayName") or email or user_info.get("id") or "Usuário"
+    cargo = user_info.get("jobTitle")
 
-
-def microsoft_login_url() -> str:
-    ms = st.secrets.get("microsoft", {})
-    tenant = ms.get("tenant_id")
-    client_id = ms.get("client_id")
-    redirect_uri = ms.get("redirect_uri")
-    scope = ms.get("scope", ["User.Read", "email", "openid", "profile"])  # escopos padrão
-
-    if not (tenant and client_id and redirect_uri):
-        raise RuntimeError("Preencha tenant_id/client_id/redirect_uri em st.secrets['microsoft'].")
-
-    params = {
-        "client_id": client_id,
-        "response_type": "code",
-        "redirect_uri": redirect_uri,
-        "response_mode": "query",
-        "scope": " ".join(scope),
-        "state": "msal_login",  # pode trocar para anti-CSRF
-    }
-    return f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?{urlencode(params)}"
-
-
-def handle_microsoft_callback() -> Optional[dict]:
-    """Se a URL tiver ?code=..., troca por tokens e devolve claims (id_token)."""
-    qs = st.query_params
-    if "code" not in qs:
-        return None
-
-    code = qs.get("code")
-    ms = st.secrets.get("microsoft", {})
-    redirect_uri = ms.get("redirect_uri")
-    scope = ms.get("scope", ["User.Read", "email", "openid", "profile"])  # escopos padrão
-
-    app = get_msal_app()
-    token = app.acquire_token_by_authorization_code(code, scopes=scope, redirect_uri=redirect_uri)
-
-    if "id_token_claims" not in token:
-        # Mostra erro detalhado, se houver
-        err = token.get("error_description") or token
-        st.error(f"Falha na autenticação Microsoft: {err}")
-        return None
-
-    claims = token["id_token_claims"]
-
-    # Campos úteis para montar o "author"
-    email = (
-        claims.get("email")
-        or (claims.get("preferred_username") if "@" in str(claims.get("preferred_username", "")) else None)
-        or (claims.get("unique_name") if "@" in str(claims.get("unique_name", "")) else None)
-    )
-    nome = claims.get("name") or email or claims.get("oid")
-
-    # Regra de perfil/cargo: default visualizador; você pode mapear domínio/email se quiser
+    # Regra default (ajuste se quiser mapear por domínio, grupos, etc.)
     perfil = "visualizador"
-    cargo = None
-
-    # Exemplo de mapeamento opcional por domínio (se desejar):
-    # dom = str(email).split("@")[-1].lower() if email else ""
+    # Exemplo opcional: domínio Synvia como editor
+    # dom = (email or "").split("@")[-1].lower() if email else ""
     # if dom == "synvia.com":
     #     perfil = "editor"
 
-    author = {
-        "username": email or claims.get("oid"),
-        "name": nome,
+    return {
+        "username": email or user_info.get("id"),
+        "name": name,
         "email": email,
         "cargo": cargo,
-        "roles": [],
+        "roles": [],  # mapeie grupos do AAD aqui, se necessário
         "perfil": perfil,
         "source": "oauth2_microsoft",
     }
-    return author
 
+def _redirect_by_perfil():
+    perfil = st.session_state.get("perfil") or st.session_state.get("author", {}).get("perfil", "visualizador")
+    destino = "Home.py" if perfil == "visualizador" else DESTINO_POR_PERFIL.get(perfil, DEFAULT_PAGE)
+    _go(destino)
+    st.stop()
 
 # -----------------------------------------------------
 # UI
 # -----------------------------------------------------
-st.title("🔐 Login")
+
 
 # Esconde sidebar enquanto não autenticado
 if not st.session_state.get("authentication_status"):
@@ -204,107 +141,152 @@ if not st.session_state.get("authentication_status"):
 
 # Se já autenticado anteriormente (por qualquer método), redireciona
 if st.session_state.get("authentication_status") is True and st.session_state.get("author"):
-    perfil = st.session_state.get("perfil") or st.session_state["author"].get("perfil", "visualizador")
-    destino = "Home.py" if perfil == "visualizador" else DESTINO_POR_PERFIL.get(perfil, DEFAULT_PAGE)
-    _go(destino)
-    st.stop()
+    _redirect_by_perfil()
 
-# 1) Fluxo Microsoft como principal
-with st.container(border=True):
-    st.subheader("Entrar com Microsoft (SSO)")
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        if st.button("🔵 Entrar com Microsoft", use_container_width=True):
-            try:
-                st.session_state["_ms_login_clicked"] = True
-                st.rerun()
-            except Exception as e:
-                st.error(e)
+# ===== 1) Fluxo Microsoft como principal — via SEU MÓDULO =====
+auth = MicrosoftAuth()
 
-    # Se clicou, redireciona para o authorize
-    if st.session_state.get("_ms_login_clicked"):
-        try:
-            url = microsoft_login_url()
-            st.markdown(f"<meta http-equiv='refresh' content='0; url={url}'>", unsafe_allow_html=True)
-        except Exception as e:
-            st.error(e)
+# Renderiza a tela de login estilizada e processa callback ?code=
+if create_login_page(auth):
+    # Já autenticou pelo módulo. Garante token válido e popula o padrão do app.
+    AuthManager.check_and_refresh_token(auth)
+    user_info = AuthManager.get_current_user() or {}
 
-# Se retornou de Microsoft com code, processa agora
-ms_author = handle_microsoft_callback()
-if ms_author:
-    # Marca como autenticado
-    st.session_state["author"] = ms_author
+    # Normaliza para o seu formato st.session_state["author"]
+    author = _graph_to_author(user_info)
+    st.session_state["author"] = author
     st.session_state["authentication_status"] = True
-    st.session_state["username"] = ms_author.get("username")
-    st.session_state["perfil"] = ms_author.get("perfil", "visualizador")
-    st.success(f"Bem-vindo(a), {ms_author.get('name')}!")
-    destino = "Home.py" if ms_author["perfil"] == "visualizador" else DESTINO_POR_PERFIL.get(ms_author["perfil"], DEFAULT_PAGE)
-    _go(destino)
-    st.stop()
+    st.session_state["username"] = author.get("username")
+    st.session_state["perfil"] = author.get("perfil", "visualizador")
 
-# 2) Fluxo Usuário/Senha via config.yaml (secundário)
-with st.container(border=True):
-    st.subheader("Ou entrar com Usuário e Senha")
+    st.success(f"Bem-vindo(a), {author.get('name')}!")
+    _redirect_by_perfil()
 
-    cfg = load_config_yaml()
-    creds_cfg = cfg.get("credentials") or cfg.get("credentials".upper())
 
-    if not creds_cfg:
-        st.info("Arquivo config.yaml não encontrado ou sem a chave 'credentials'.")
-    else:
-        try:
-            authenticator = stauth.Authenticate(
-                creds_cfg,
-                cookie_name=cfg.get("cookie", {}).get("name", "app_cookie"),
-                key=cfg.get("cookie", {}).get("key", "troque-esta-chave"),
-                cookie_expiry_days=int(cfg.get("cookie", {}).get("expiry_days", 7)),
-            )
 
-            # Renderiza o login da lib
-            name, auth_status, username = authenticator.login("Entrar", "main")
 
-            if auth_status:
-                urec = creds_cfg["usernames"][username]
-                full_name = _first_nonempty(
-                    f"{urec.get('first_name','')} {urec.get('last_name','')}".strip(),
-                    urec.get("name"),
-                    username,
-                )
-                # Monta o author padronizado
-                author = {
-                    "username": username,
-                    "name": full_name,
-                    "email": urec.get("email"),
-                    "cargo": urec.get("cargo"),
-                    "roles": urec.get("roles", []),
-                    "perfil": urec.get("perfil", "visualizador"),
-                    "source": "password",
-                }
-                st.session_state["author"] = author
-                st.session_state["authentication_status"] = True
-                st.session_state["username"] = username
-                st.session_state["perfil"] = author["perfil"]
+# ---------------------------------------------
+# Helpers
+# ---------------------------------------------
+def _first_nonempty(*vals):
+    for v in vals:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if v:  # qualquer truthy
+            return v
+    return None
 
-                st.success(f"Bem-vindo(a), {author['name']}!")
-                destino = "Home.py" if author["perfil"] == "visualizador" else DESTINO_POR_PERFIL.get(author["perfil"], DEFAULT_PAGE)
-                _go(destino)
-                st.stop()
-            elif auth_status is False:
-                st.error("Usuário ou senha inválidos.")
-            else:
-                st.caption("Informe suas credenciais para entrar.")
-        except Exception as e:
-            st.error(f"Erro na autenticação local: {e}")
+def load_config_yaml():
+    """
+    Lê o config.yaml do caminho indicado na env CONFIG_YAML (se existir)
+    ou do arquivo local ./config.yaml. Retorna dict (ou {}).
+    """
+    path = os.getenv("CONFIG_YAML", "config.yaml")
+    if not os.path.exists(path):
+        return {}
 
-# Botão de logout (apenas se autenticado; normalmente ficará em páginas internas)
-if st.session_state.get("authentication_status"):
     try:
-        # Se login foi via streamlit-authenticator, o botão deles gerencia o cookie
-        authenticator.logout("Sair", "sidebar")  # pode ignorar se não autenticou via senha
-    except Exception:
-        # Logout manual para o caso do Microsoft
-        if st.sidebar.button("Sair"):
-            for k in ("authentication_status", "username", "author", "perfil", "_ms_login_clicked"):
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.rerun()
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+            return cfg
+    except Exception as e:
+        st.error(f"Falha ao ler {path}: {e}")
+        return {}
+
+def _normalize_creds(creds_cfg: dict) -> dict:
+    """
+    Garante o formato esperado pelo streamlit-authenticator:
+    {
+      "usernames": {
+         "login": {
+            "name": "Nome",
+            "email": "email@x.com",
+            "password": "<bcrypt>",
+            "roles": [...],
+            "perfil": "visualizador",
+            ...
+         }
+      }
+    }
+    Suporta 'password_plain' e converte para 'password' (bcrypt).
+    Ignora usuários sem senha válida (plain ou hash).
+    """
+    if not isinstance(creds_cfg, dict):
+        return {}
+
+    # aceitar tanto "usernames" quanto "USERS"/"users" etc.
+    usernames = (
+        creds_cfg.get("usernames")
+        or creds_cfg.get("USERNAMES")
+        or creds_cfg.get("users")
+        or creds_cfg.get("USERS")
+        or {}
+    )
+    if not isinstance(usernames, dict):
+        return {}
+
+    normalized_users = {}
+    to_hash_batch = []
+
+    # 1) primeira passada: coletar quem tem password_plain
+    for uname, rec in usernames.items():
+        rec = rec or {}
+        pwd_hash = rec.get("password") or rec.get("PASSWORD")
+        pwd_plain = rec.get("password") or rec.get("PASSWORD_PLAIN")
+
+        # se só tem plain, vamos hashear depois
+        if (not pwd_hash) and pwd_plain:
+            to_hash_batch.append((uname, str(pwd_plain)))
+
+    # 2) gerar hashes (se houver)
+    if to_hash_batch:
+        # Hasher recebe lista de senhas e devolve lista de hashes na mesma ordem
+        hashed_list = stauth.Hasher([p for _, p in to_hash_batch]).generate()
+        for (uname, _), h in zip(to_hash_batch, hashed_list):
+            # injetar de volta no dict original para unificar caminho
+            user_rec = usernames.get(uname) or {}
+            user_rec["password"] = h
+            usernames[uname] = user_rec
+
+    # 3) segunda passada: montar normalized_users só dos válidos
+    for uname, rec in usernames.items():
+        rec = rec or {}
+        pwd_hash = rec.get("password") or rec.get("PASSWORD")
+
+        # streamlit-authenticator exige hash bcrypt aqui
+        if not pwd_hash or not isinstance(pwd_hash, str) or not pwd_hash.startswith("$2"):
+            # se não for hash válido, pula o usuário
+            continue
+
+        normalized_users[uname] = {
+            "name": _first_nonempty(
+                f"{(rec.get('first_name') or '').strip()} {(rec.get('last_name') or '').strip()}".strip(),
+                rec.get("name"),
+                uname,
+            ),
+            "email": rec.get("email"),
+            "password": pwd_hash,
+            "cargo": rec.get("cargo"),
+            "roles": rec.get("roles", []) or [],
+            "perfil": rec.get("perfil", "visualizador"),
+        }
+
+    if not normalized_users:
+        return {}
+
+    return {"usernames": normalized_users}
+
+def _read_cookie_cfg(cfg: dict) -> dict:
+    cookie = cfg.get("cookie") or cfg.get("COOKIE") or {}
+    return {
+        "name": (cookie.get("name") or cookie.get("NAME") or "app_cookie"),
+        "key": (cookie.get("key") or cookie.get("KEY") or "troque-esta-chave"),
+        "expiry_days": int(cookie.get("expiry_days") or cookie.get("EXPIRY_DAYS") or 7),
+    }
+
+def _redirect_by_perfil():
+    """
+    Seu roteamento por perfil. Troque pelo seu fluxo.
+    Exemplo: st.switch_page("pages/01_Painel.py")
+    """
+    pass
