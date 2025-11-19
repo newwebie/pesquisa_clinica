@@ -1,292 +1,150 @@
-# Home.py — Tela de login híbrida (Microsoft como principal + Usuário/Senha via config.yaml)
-# Dependências:
-#   pip install streamlit msal pyyaml streamlit-authenticator
-#
-# Configuração necessária:
-# - OAuth2 Microsoft em st.secrets["auth"]  (client_id / client_secret / tenant_id / redirect_uri_local / redirect_uri_prod / scope)
-#   (seus valores antigos em st.secrets["microsoft"] devem ser migrados para "auth")
-# - Usuários locais (username/senha/roles/cargo/email) em config.yaml
-#
-# O que este arquivo faz:
-# 1) Mostra Microsoft SSO estilizado vindo do módulo (create_login_page)
-# 2) Mostra fallback Usuário/Senha (streamlit-authenticator)
-# 3) Após autenticar, padroniza st.session_state["author"] = {username, name, email, cargo, perfil, roles, source}
-# 4) Redireciona por perfil
-
+"""Tela inicial do app com autenticação usando config.yaml."""
 from __future__ import annotations
 
-# ===== IMPORTA O SEU MÓDULO =====
-from auth_microsoft import MicrosoftAuth, AuthManager, create_login_page, create_user_header
-import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
+
 import streamlit as st
+import streamlit_authenticator as stauth
 import yaml
 from yaml.loader import SafeLoader
-import streamlit_authenticator as stauth
 
-# -----------------------------------------------------
-# Config da página
-# -----------------------------------------------------
-st.set_page_config(page_title="Login", page_icon="🔐", layout="centered")
+st.set_page_config(page_title="Portal Pesquisa Clínica", page_icon="🧪", layout="centered")
 
-# -----------------------------------------------------
-# Navegação e utilitários
-# -----------------------------------------------------
-PAGES_ROOT = Path(__file__).parent
-DESTINO_POR_PERFIL = {
-    "administrador": "pages/01_Administrador.py",
-    "editor": "pages/02_Editor.py",
-    "visualizador": "Home.py",
-}
-DEFAULT_PAGE = "Home.py"
+HIDE_SIDEBAR_STYLE = """
+    <style>
+        [data-testid="stSidebar"] {display: none;}
+        [data-testid="stSidebarNav"] {display: none;}
+        [data-testid="collapsedControl"] {display: none;}
+    </style>
+"""
 
-def _go(destino: str):
-    """Redireciona para uma página do Streamlit."""
-    if not destino:
-        destino = DEFAULT_PAGE
-
-    if not destino.endswith(".py"):
-        if destino.startswith("pages/"):
-            destino = f"{destino}.py"
-        else:
-            destino = f"pages/{destino}.py"
-
-    destino_path = PAGES_ROOT / destino
-    if destino == "Home.py":
-        destino_path = PAGES_ROOT / "Home.py"
-
-    if not destino_path.exists():
-        st.error(f"Página não encontrada: {destino}")
-        return
-
-    if hasattr(st, "switch_page"):
-        if destino_path.name == "Home.py":
-            st.switch_page("Home.py")
-        else:
-            st.switch_page(destino)
-    else:
-        st.success(f"Login efetuado. Abra a página **{destino}** no menu à esquerda.")
-        st.stop()
-
-def _first_nonempty(*vals):
-    for v in vals:
-        if v and str(v).strip():
-            return str(v).strip()
-    return None
-
-# -----------------------------------------------------
-# Carregar config.yaml (usuários locais)
-# -----------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_config_yaml() -> dict:
-    cfg_path = Path("config.yaml")
-    if not cfg_path.exists():
-        return {}
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        return yaml.load(f, Loader=SafeLoader) or {}
-
-# -----------------------------------------------------
-# Funções de mapeamento Microsoft → author (PADRÃO DO SEU APP)
-# -----------------------------------------------------
-def _graph_to_author(user_info: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Converte o payload do Microsoft Graph /me no formato padronizado do app:
-    {username, name, email, cargo, perfil, roles, source}
-    """
-    email = user_info.get("mail") or user_info.get("userPrincipalName")
-    name = user_info.get("displayName") or email or user_info.get("id") or "Usuário"
-    cargo = user_info.get("jobTitle")
-
-    # Regra default (ajuste se quiser mapear por domínio, grupos, etc.)
-    perfil = "visualizador"
-    # Exemplo opcional: domínio Synvia como editor
-    # dom = (email or "").split("@")[-1].lower() if email else ""
-    # if dom == "synvia.com":
-    #     perfil = "editor"
-
-    return {
-        "username": email or user_info.get("id"),
-        "name": name,
-        "email": email,
-        "cargo": cargo,
-        "roles": [],  # mapeie grupos do AAD aqui, se necessário
-        "perfil": perfil,
-        "source": "oauth2_microsoft",
-    }
-
-def _redirect_by_perfil():
-    perfil = st.session_state.get("perfil") or st.session_state.get("author", {}).get("perfil", "visualizador")
-    destino = "Home.py" if perfil == "visualizador" else DESTINO_POR_PERFIL.get(perfil, DEFAULT_PAGE)
-    _go(destino)
-    st.stop()
-
-# -----------------------------------------------------
-# UI
-# -----------------------------------------------------
+st.markdown(HIDE_SIDEBAR_STYLE, unsafe_allow_html=True)
 
 
-# Esconde sidebar enquanto não autenticado
-if not st.session_state.get("authentication_status"):
-    st.markdown(
-        """
-        <style>
-            [data-testid="stSidebar"] {display: none;}
-            [data-testid="stSidebarNav"] {display: none;}
-            [data-testid="collapsedControl"] {display: none;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# Se já autenticado anteriormente (por qualquer método), redireciona
-if st.session_state.get("authentication_status") is True and st.session_state.get("author"):
-    _redirect_by_perfil()
-
-# ===== 1) Fluxo Microsoft como principal — via SEU MÓDULO =====
-auth = MicrosoftAuth()
-
-# Renderiza a tela de login estilizada e processa callback ?code=
-if create_login_page(auth):
-    # Já autenticou pelo módulo. Garante token válido e popula o padrão do app.
-    AuthManager.check_and_refresh_token(auth)
-    user_info = AuthManager.get_current_user() or {}
-
-    # Normaliza para o seu formato st.session_state["author"]
-    author = _graph_to_author(user_info)
-    st.session_state["author"] = author
-    st.session_state["authentication_status"] = True
-    st.session_state["username"] = author.get("username")
-    st.session_state["perfil"] = author.get("perfil", "visualizador")
-
-    st.success(f"Bem-vindo(a), {author.get('name')}!")
-    _redirect_by_perfil()
-
-
-
-
-# ---------------------------------------------
-# Helpers
-# ---------------------------------------------
-def _first_nonempty(*vals):
-    for v in vals:
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-        if v:  # qualquer truthy
-            return v
-    return None
-
-def load_config_yaml():
-    """
-    Lê o config.yaml do caminho indicado na env CONFIG_YAML (se existir)
-    ou do arquivo local ./config.yaml. Retorna dict (ou {}).
-    """
-    path = os.getenv("CONFIG_YAML", "config.yaml")
-    if not os.path.exists(path):
+def _load_config() -> Dict[str, Any]:
+    """Carrega o config.yaml da raiz do projeto."""
+    config_path = Path("config.yaml")
+    if not config_path.exists():
         return {}
 
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-            return cfg
-    except Exception as e:
-        st.error(f"Falha ao ler {path}: {e}")
-        return {}
+    with open(config_path, "r", encoding="utf-8") as file:
+        return yaml.load(file, Loader=SafeLoader) or {}
 
-def _normalize_creds(creds_cfg: dict) -> dict:
-    """
-    Garante o formato esperado pelo streamlit-authenticator:
-    {
-      "usernames": {
-         "login": {
-            "name": "Nome",
-            "email": "email@x.com",
-            "password": "<bcrypt>",
-            "roles": [...],
-            "perfil": "visualizador",
-            ...
-         }
-      }
-    }
-    Suporta 'password_plain' e converte para 'password' (bcrypt).
-    Ignora usuários sem senha válida (plain ou hash).
-    """
-    if not isinstance(creds_cfg, dict):
-        return {}
 
-    # aceitar tanto "usernames" quanto "USERS"/"users" etc.
-    usernames = (
-        creds_cfg.get("usernames")
-        or creds_cfg.get("USERNAMES")
-        or creds_cfg.get("users")
-        or creds_cfg.get("USERS")
-        or {}
-    )
-    if not isinstance(usernames, dict):
-        return {}
+def _normalize_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Garante que todos os usuários tenham senha em formato bcrypt."""
+    credentials = config.get("credentials", {})
+    usernames = credentials.get("usernames", {})
+    normalized: Dict[str, Dict[str, Any]] = {}
 
-    normalized_users = {}
-    to_hash_batch = []
-
-    # 1) primeira passada: coletar quem tem password_plain
-    for uname, rec in usernames.items():
-        rec = rec or {}
-        pwd_hash = rec.get("password") or rec.get("PASSWORD")
-        pwd_plain = rec.get("password") or rec.get("PASSWORD_PLAIN")
-
-        # se só tem plain, vamos hashear depois
-        if (not pwd_hash) and pwd_plain:
-            to_hash_batch.append((uname, str(pwd_plain)))
-
-    # 2) gerar hashes (se houver)
-    if to_hash_batch:
-        # Hasher recebe lista de senhas e devolve lista de hashes na mesma ordem
-        hashed_list = stauth.Hasher([p for _, p in to_hash_batch]).generate()
-        for (uname, _), h in zip(to_hash_batch, hashed_list):
-            # injetar de volta no dict original para unificar caminho
-            user_rec = usernames.get(uname) or {}
-            user_rec["password"] = h
-            usernames[uname] = user_rec
-
-    # 3) segunda passada: montar normalized_users só dos válidos
-    for uname, rec in usernames.items():
-        rec = rec or {}
-        pwd_hash = rec.get("password") or rec.get("PASSWORD")
-
-        # streamlit-authenticator exige hash bcrypt aqui
-        if not pwd_hash or not isinstance(pwd_hash, str) or not pwd_hash.startswith("$2"):
-            # se não for hash válido, pula o usuário
+    for username, data in usernames.items():
+        if not isinstance(data, dict):
             continue
 
-        normalized_users[uname] = {
-            "name": _first_nonempty(
-                f"{(rec.get('first_name') or '').strip()} {(rec.get('last_name') or '').strip()}".strip(),
-                rec.get("name"),
-                uname,
-            ),
-            "email": rec.get("email"),
-            "password": pwd_hash,
-            "cargo": rec.get("cargo"),
-            "roles": rec.get("roles", []) or [],
-            "perfil": rec.get("perfil", "visualizador"),
-        }
+        password = data.get("password")
+        if not password:
+            continue
 
-    if not normalized_users:
-        return {}
+        password_str = str(password)
+        if not password_str.startswith("$2"):
+            password_str = stauth.Hasher([password_str]).generate()[0]
 
-    return {"usernames": normalized_users}
+        normalized[username] = {**data, "password": password_str}
 
-def _read_cookie_cfg(cfg: dict) -> dict:
-    cookie = cfg.get("cookie") or cfg.get("COOKIE") or {}
+    return {"usernames": normalized}
+
+
+def _cookie_settings(config: Dict[str, Any]) -> Dict[str, Any]:
+    cookie = config.get("cookie", {})
     return {
-        "name": (cookie.get("name") or cookie.get("NAME") or "app_cookie"),
-        "key": (cookie.get("key") or cookie.get("KEY") or "troque-esta-chave"),
-        "expiry_days": int(cookie.get("expiry_days") or cookie.get("EXPIRY_DAYS") or 7),
+        "name": cookie.get("name") or "pesquisa_clinica_auth",
+        "key": cookie.get("key") or "troque-esta-chave",
+        "expiry_days": int(cookie.get("expiry_days") or 1),
     }
 
-def _redirect_by_perfil():
-    """
-    Seu roteamento por perfil. Troque pelo seu fluxo.
-    Exemplo: st.switch_page("pages/01_Painel.py")
-    """
-    pass
+
+def _admin_email_whitelist(config: Dict[str, Any]) -> set[str]:
+    """Retorna o conjunto de e-mails autorizados a acessar a área administrativa."""
+
+    def _normalize(entries: Any) -> set[str]:
+        if not isinstance(entries, (list, tuple, set)):
+            return set()
+        return {str(item).strip().lower() for item in entries if str(item).strip()}
+
+    admin_section = config.get("admin") if isinstance(config.get("admin"), dict) else {}
+    candidates = [
+        admin_section.get("emails"),
+        config.get("admin_emails"),
+        (config.get("pre-authorized", {}) or {}).get("emails"),
+    ]
+
+    for candidate in candidates:
+        normalized = _normalize(candidate)
+        if normalized:
+            return normalized
+
+    return set()
+
+
+def _switch_page(target: str) -> None:
+    """Encapsula o redirecionamento para outras páginas Streamlit."""
+    target_file = target if target.endswith(".py") else f"{target}.py"
+    if hasattr(st, "switch_page"):
+        st.switch_page(target_file)
+    else:
+        st.info(f"Abra **{target_file}** pelo seletor de páginas do Streamlit.")
+
+
+config_data = _load_config()
+credentials = _normalize_credentials(config_data)
+admin_whitelist = _admin_email_whitelist(config_data)
+
+if not credentials.get("usernames"):
+    st.error("Nenhum usuário definido em config.yaml.")
+    st.stop()
+
+cookie_cfg = _cookie_settings(config_data)
+
+authenticator = stauth.Authenticate(
+    credentials,
+    cookie_cfg["name"],
+    cookie_cfg["key"],
+    cookie_cfg["expiry_days"],
+)
+
+st.title("Portal Pesquisa Clínica")
+st.write("Acesse usando o usuário e senha definidos no arquivo `config.yaml`.")
+
+name, authentication_status, username = authenticator.login("Login", "main")
+
+if authentication_status:
+    st.success(f"Bem-vindo(a), {name}!")
+    st.session_state["authentication_status"] = True
+    st.session_state["username"] = username
+    user_data = credentials.get("usernames", {}).get(username, {})
+    user_email = str(user_data.get("email", "")).strip().lower()
+    is_admin = bool(user_email and user_email in admin_whitelist)
+
+    st.subheader("Escolha a funcionalidade desejada")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Cadastro", use_container_width=True):
+            _switch_page("cadastro.py")
+    with col2:
+        if st.button("Administração de Desvios", use_container_width=True):
+            if is_admin:
+                _switch_page("admDesvios.py")
+            else:
+                st.error("Acesso restrito a e-mails autorizados pela administração.")
+
+    if not is_admin:
+        st.caption(
+            "Somente usuários com e-mail autorizado podem acessar a área administrativa."
+        )
+
+    authenticator.logout("Sair", "main")
+elif authentication_status is False:
+    st.error("Usuário ou senha incorretos. Verifique os valores em config.yaml.")
+else:
+    st.info("Informe as credenciais para continuar.")
