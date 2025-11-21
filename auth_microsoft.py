@@ -28,30 +28,19 @@ MUTED_TEXT = "#5B6770"
 # Estilos dedicados para a tela de login
 LOGIN_PAGE_CSS = f"""
 <style>
-.login-wrapper {{
-    position: relative;
-    min-height: calc(100vh - 6rem);
-    padding: 3.5rem 1.5rem 4.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(160deg, rgba(15, 28, 22, 0.94) 0%, rgba(18, 45, 25, 0.92) 35%, rgba(82, 181, 75, 0.88) 100%);
-    overflow: hidden;
-}}
-.login-wrapper::before {{
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at 18% 22%, rgba(107, 191, 71, 0.32), transparent 58%),
-                radial-gradient(circle at 82% 78%, rgba(82, 181, 75, 0.22), transparent 55%);
-    opacity: 0.9;
-    pointer-events: none;
-}}
+
 .login-inner {{
     position: relative;
     width: 100%;
     max-width: 540px;
     z-index: 1;
+
+    /* centraliza vertical e horizontalmente */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh; /* ocupa a altura inteira da tela */
+    margin: 0 auto; /* centraliza horizontalmente */
 }}
 .login-card {{
     background: #ffffff;

@@ -3,6 +3,15 @@ import pandas as pd
 from pathlib import Path
 st.set_page_config(page_title="Cadastro de Desvios", page_icon="📝", layout="centered")
 
+HIDE_SIDEBAR_NAVIGATION = """
+<style>
+    [data-testid="stSidebarNav"] {display: none;}
+    [data-testid="collapsedControl"] {display: none;}
+</style>
+"""
+
+st.markdown(HIDE_SIDEBAR_NAVIGATION, unsafe_allow_html=True)
+
 
 # Campos do formulário
 with st.form("cadastro_desvio_form"):
