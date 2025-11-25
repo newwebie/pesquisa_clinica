@@ -43,7 +43,7 @@ LOGIN_PAGE_CSS = f"""
     margin: 0 auto; /* centraliza horizontalmente */
 }}
 .login-card {{
-    background: #ffffff;
+    background: linear-gradient(160deg, rgba(15, 28, 22, 0.94) 0%, rgba(18, 45, 25, 0.92) 35%, rgba(82, 181, 75, 0.88) 100%);
     border-radius: 22px;
     padding: 2.75rem 3rem;
     box-shadow: 0 26px 64px rgba(15, 28, 22, 0.22);
