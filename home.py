@@ -22,9 +22,6 @@ PAGE_STYLE = """
     [data-testid="stSidebarNav"] {display: none !important;}
     [data-testid="collapsedControl"] {display: none !important;}
 
-    /* Aplica cor de fundo em toda a aplicação */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
-        background: linear-gradient(160deg, rgba(15, 28, 22, 0.94) 0%, rgba(18, 45, 25, 0.92) 35%, rgba(82, 181, 75, 0.88) 100%);
     }
 </style>
 """

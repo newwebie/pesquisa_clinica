@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from pathlib import Path
+import psycopg2  # pip install psycopg2-binary
+
 st.set_page_config(page_title="Cadastro de Desvios", page_icon="📝", layout="centered")
 
 HIDE_SIDEBAR_NAVIGATION = """
@@ -11,6 +12,18 @@ HIDE_SIDEBAR_NAVIGATION = """
 """
 
 st.markdown(HIDE_SIDEBAR_NAVIGATION, unsafe_allow_html=True)
+
+
+# 🔌 Conexão com o banco via secrets.toml
+def get_connection():
+    db = st.secrets["postgres"]
+    return psycopg2.connect(
+        host=db["host"],
+        port=db["port"],
+        dbname=db["database"],
+        user=db["user"],
+        password=db["password"],
+    )
 
 
 # Campos do formulário
@@ -118,11 +131,101 @@ if submit:
 
     df_registro = pd.DataFrame([registro])
 
-    arquivo_registros = Path("cadastro_registros.csv")
-    if arquivo_registros.exists():
-        df_registro.to_csv(arquivo_registros, mode="a", header=False, index=False)
-    else:
-        df_registro.to_csv(arquivo_registros, index=False)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    st.success("Registro salvo com sucesso!")
-    st.dataframe(df_registro)
+        # 🔁 Agora alinhado com os nomes da tabela:
+        # id,"participante","data_ocorrido","formulario_status","identificacao_desvio","centro",
+        # "visita","descricao_desvio","causa_raiz","acao_preventiva","acao_corretiva",
+        # "importancia","data_identificacao_texto","categoria","subcategoria","codigo","escopo",
+        # "avaliacao_gerente_medico","avaliacao_investigador","formulario_arquivado","recorrencia",
+        # "num_ocorrencia_previa","prazo_escalonamento","data_escalonamento","atendeu_prazos_report",
+        # "populacao","data_submissao_cep","data_finalizacao","criado_por_id","criado_em"
+
+        insert_query = """
+        INSERT INTO desvios (
+            participante,
+            data_ocorrido,
+            formulario_status,
+            identificacao_desvio,
+            centro,
+            visita,
+            descricao_desvio,
+            causa_raiz,
+            acao_preventiva,
+            acao_corretiva,
+            importancia,
+            data_identificacao_texto,
+            categoria,
+            subcategoria,
+            codigo,
+            escopo,
+            avaliacao_gerente_medico,
+            avaliacao_investigador,
+            formulario_arquivado,
+            recorrencia,
+            num_ocorrencia_previa,
+            prazo_escalonamento,
+            data_escalonamento,
+            atendeu_prazos_report,
+            populacao,
+            data_submissao_cep,
+            data_finalizacao
+            -- criado_por_id e criado_em ficam pro banco preencher (NULL/default)
+        )
+        VALUES (
+            %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s
+        )
+        """
+
+        values = (
+            nome_paciente,              # participante
+            data_desvio,                # data_ocorrido (DATE)
+            formulario,                 # formulario_status
+            identiicacao_desvio,        # identificacao_desvio
+            centro,                     # centro
+            visita,                     # visita
+            desvio,                     # descricao_desvio
+            causa_raiz,                 # causa_raiz
+            acao_preventiva,            # acao_preventiva
+            acao_corretiva,             # acao_corretiva
+            importancia,                # importancia
+            data_identificacao,         # data_identificacao_texto (texto mesmo)
+            categoria,                  # categoria
+            subcategorias,              # subcategoria
+            codigo,                     # codigo
+            escopo,                     # escopo
+            avaliacao_medico,           # avaliacao_gerente_medico
+            avaliacao_investigador,     # avaliacao_investigador
+            arquivado,                  # formulario_arquivado
+            recorrencia,                # recorrencia
+            int(ocorrencia_previa) if ocorrencia_previa is not None else None,  # num_ocorrencia_previa
+            prazo_escalonamento,        # prazo_escalonamento
+            data_escalonamento,         # data_escalonamento
+            prazo_report,               # atendeu_prazos_report
+            populacao,                  # populacao
+            data_cep,                   # data_submissao_cep
+            data_finalizacao            # data_finalizacao
+        )
+
+        cursor.execute(insert_query, values)
+        conn.commit()
+
+        st.success("Desvio Salvo com Sucesso! ✅")
+
+    except Exception as e:
+        st.error(f"Erro ao salvar no banco: {e}")
+
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
