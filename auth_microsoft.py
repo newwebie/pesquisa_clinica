@@ -687,7 +687,7 @@ def create_login_page(auth: MicrosoftAuth) -> bool:
     return False
 
 
-def create_user_header():
+def create_user_header(perfil: str = None):
     """Mostrar informações do usuário e botão de logout na sidebar (discreto)."""
     if not AuthManager.is_authenticated():
         return
@@ -705,6 +705,8 @@ def create_user_header():
         st.markdown(f"👤 {display_name}")
         if email:
             st.caption(f"📧 {email}")
+        if perfil:
+            st.caption(f"🏷️ Perfil: {perfil}")
 
         if st.button("🚪 Logout", key="logout_sidebar", type="secondary", help="Sair da conta"):
             AuthManager.logout()

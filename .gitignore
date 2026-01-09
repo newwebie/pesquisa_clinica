@@ -1,2 +1,2 @@
 /.streamlit
-config.yaml
+/.streamlit/secrets.toml
