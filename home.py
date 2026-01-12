@@ -6,6 +6,10 @@ import streamlit as st
 from functools import lru_cache
 import requests
 from datetime import datetime
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import logging
 
 from auth_microsoft import (
     AuthManager,
@@ -177,13 +181,13 @@ def upload_to_sharepoint(file_content: bytes, file_name: str, estudo_codigo: str
 
 
 def pode_acessar_painel_adm(email: str) -> bool:
-    """Verifica se o usuário pode acessar o Painel Administrativo (Gerente, Gerente de Projetos ou Dev)."""
+    """Verifica se o usuário pode acessar o Painel Administrativo (apenas Administrador)."""
     if not email:
         return False
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        query = "SELECT 1 FROM usuarios WHERE LOWER(email) = %s AND perfil IN ('Gerente', 'Gerente de Projetos', 'Dev') LIMIT 1"
+        query = "SELECT 1 FROM usuarios WHERE LOWER(email) = %s AND perfil = 'Administrador' LIMIT 1"
         cursor.execute(query, (email.lower(),))
         exists = cursor.fetchone() is not None
         cursor.close()
@@ -231,7 +235,7 @@ def auto_cadastrar_usuario(email: str, nome: str) -> bool:
     """
     Auto-cadastra usuário no primeiro login.
     Apenas emails @synvia.com são permitidos.
-    Perfil padrão: Monitora
+    Perfil padrão: Usuário
     """
     if not email or not email.lower().endswith("@synvia.com"):
         return False
@@ -244,9 +248,9 @@ def auto_cadastrar_usuario(email: str, nome: str) -> bool:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO usuarios (nome, email, cargo, tipo_acesso, perfil)
-               VALUES (%s, %s, %s, %s, %s)""",
-            (nome.strip(), email.lower(), "", "Interno", "Monitora")
+            """INSERT INTO usuarios (nome, email, cargo, perfil)
+               VALUES (%s, %s, %s, %s)""",
+            (nome.strip(), email.lower(), "", "Usuário")
         )
         conn.commit()
         cursor.close()
@@ -278,6 +282,46 @@ def load_estudos_do_monitor(email: str) -> pd.DataFrame:
         return df
     except Exception as e:
         st.error(f"Erro ao carregar estudos: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def is_gerente_medico(email: str) -> bool:
+    """Verifica se o email pertence a um gerente médico cadastrado."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM gerentes_medicos WHERE LOWER(email) = %s",
+            (email.lower(),)
+        )
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return result is not None
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=60)
+def load_estudos_do_gerente_medico(email: str) -> pd.DataFrame:
+    """Carrega estudos ATIVOS onde o gerente médico está alocado."""
+    try:
+        conn = get_connection()
+        query = """
+            SELECT e.id, e.codigo, e.nome, e.status
+            FROM estudos e
+            INNER JOIN estudo_gerente_medico egm ON e.id = egm.estudo_id
+            INNER JOIN gerentes_medicos gm ON gm.id = egm.gerente_medico_id
+            WHERE LOWER(gm.email) = %s
+              AND e.status = 'ativo'
+            ORDER BY e.nome
+        """
+        df = pd.read_sql_query(query, conn, params=(email.lower(),))
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"Erro ao carregar estudos do gerente médico: {e}")
         return pd.DataFrame()
 
 
@@ -330,8 +374,9 @@ def get_patrocinador_do_estudo(estudo_id: int) -> str | None:
 # -------------------------------------------------
 # Funções de dados: Desvios
 # -------------------------------------------------
+@st.cache_data(ttl=30)
 def load_desvios_do_estudo(estudo_id: int) -> pd.DataFrame:
-    """Carrega desvios de um estudo específico."""
+    """Carrega desvios de um estudo específico (exclui deletados)."""
     try:
         conn = get_connection()
         query = """
@@ -348,6 +393,7 @@ def load_desvios_do_estudo(estudo_id: int) -> pd.DataFrame:
                 url_anexo, xmin AS row_version
             FROM desvios
             WHERE estudo_id = %s
+              AND deleted_at IS NULL
             ORDER BY numero_desvio_estudo DESC
         """
         df = pd.read_sql_query(query, conn, params=(estudo_id,))
@@ -620,12 +666,56 @@ def remover_gerente_medico_do_estudo(estudo_id: int) -> bool:
         return False
 
 
-def contar_desvios_do_estudo(estudo_id: int) -> int:
-    """Retorna a quantidade de desvios de um estudo."""
+def get_estudos_do_gerente_medico_por_id(gerente_id: int) -> list[str]:
+    """Retorna lista de códigos dos estudos onde o GM está alocado."""
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM desvios WHERE estudo_id = %s", (estudo_id,))
+        cursor.execute(
+            """SELECT e.codigo
+               FROM estudos e
+               INNER JOIN estudo_gerente_medico egm ON e.id = egm.estudo_id
+               WHERE egm.gerente_medico_id = %s
+               ORDER BY e.codigo""",
+            (gerente_id,)
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return [row[0] for row in rows]
+    except Exception:
+        return []
+
+
+def contar_desvios_do_estudo(estudo_id: int) -> int:
+    """Retorna a quantidade de desvios de um estudo (exclui deletados)."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM desvios WHERE estudo_id = %s AND deleted_at IS NULL",
+            (estudo_id,)
+        )
+        count = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        return count
+    except Exception:
+        return 0
+
+
+def contar_pendencias_do_estudo(estudo_id: int) -> int:
+    """Retorna a quantidade de desvios sem avaliação do Gerente Médico (pendências), excluindo deletados."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT COUNT(*) FROM desvios
+               WHERE estudo_id = %s
+               AND (avaliacao_gerente_medico IS NULL OR avaliacao_gerente_medico = '')
+               AND deleted_at IS NULL""",
+            (estudo_id,)
+        )
         count = cursor.fetchone()[0]
         cursor.close()
         conn.close()
@@ -646,10 +736,303 @@ def get_nomes_monitores_do_estudo(estudo_id: int) -> list[str]:
     return nomes
 
 
+def get_emails_do_estudo(estudo_id: int) -> list[str]:
+    """Retorna lista de emails de todos os participantes do estudo (monitores + gerente médico)."""
+    emails = set()
+
+    # Monitores
+    df_monitores = load_monitores_do_estudo(estudo_id)
+    if not df_monitores.empty:
+        for _, mon in df_monitores.iterrows():
+            if mon['monitor_email']:
+                emails.add(mon['monitor_email'].lower())
+
+    # Gerente Médico
+    gerente = get_gerente_medico_do_estudo(estudo_id)
+    if gerente and gerente.get('email'):
+        emails.add(gerente['email'].lower())
+
+    return list(emails)
+
+
+# Mapeamento de nomes de campos do banco para nomes de exibição
+CAMPOS_DISPLAY_NAMES = {
+    'participante': 'Participante',
+    'data_ocorrido': 'Data do Ocorrido',
+    'formulario_status': 'Formulário',
+    'identificacao_desvio': 'Identificação do Desvio',
+    'centro': 'Centro',
+    'visita': 'Visita',
+    'descricao_desvio': 'Descrição do Desvio',
+    'causa_raiz': 'Causa Raiz',
+    'acao_preventiva': 'Ação Preventiva',
+    'acao_corretiva': 'Ação Corretiva',
+    'importancia': 'Importância',
+    'data_identificacao_texto': 'Data de Identificação',
+    'categoria': 'Categoria',
+    'subcategoria': 'Subcategoria',
+    'codigo': 'Código',
+    'recorrencia': 'Recorrência',
+    'num_ocorrencia_previa': 'N° Desvio Ocorrência Prévia',
+    'escopo': 'Escopo',
+    'prazo_escalonamento': 'Prazo para Escalonamento',
+    'data_escalonamento': 'Data de Escalonamento',
+    'atendeu_prazos_report': 'Atendeu os Prazos de Report?',
+    'motivo_nao_atendeu_prazo': 'Motivo (se não atendeu prazos)',
+    'populacao': 'População',
+    'data_submissao_cep': 'Data de Submissão ao CEP',
+    'data_finalizacao': 'Data de Finalização',
+    'formulario_arquivado': 'Formulário Arquivado (ISF e TFM)?',
+    'avaliacao_investigador': 'Avaliação Investigador Principal',
+    'avaliacao_gerente_medico': 'Avaliação Gerente Médico',
+    'status': 'Status',
+    'url_anexo': 'Anexo',
+}
+
+# Mapeamento de tradução PT -> EN para campos de selectbox (usado pelo site externo)
+TRADUCAO_PT_EN = {
+    # Status do desvio
+    'Novo': 'New',
+    'Modificado': 'Modified',
+    'Avaliado': 'Evaluated',
+    # Sim/Não (formulário, atendeu prazos, etc.)
+    'Sim': 'Yes',
+    'Não': 'No',
+    # Importância
+    'Maior': 'Major',
+    'Menor': 'Minor',
+    # Recorrência
+    'Recorrente': 'Recurring',
+    'Não Recorrente': 'Non-Recurring',
+    # Escopo
+    'Protocolo': 'Protocol',
+    'GCP': 'GCP',
+    # N/A permanece igual
+    'N/A': 'N/A',
+    # Prazo de Escalonamento
+    'Mensal': 'Monthly',
+    'Padrão': 'Default',
+    'Imediato': 'Immediate',
+    # População
+    'Intenção de Tratar (ITT)': 'ITT',
+    'Por Protocolo (PP)': 'Per Protocol',
+}
+
+# Mapeamento inverso EN -> PT (para quando precisar converter de volta)
+TRADUCAO_EN_PT = {v: k for k, v in TRADUCAO_PT_EN.items()}
+
+
+def traduzir_valor_para_ingles(valor: str) -> str:
+    """Traduz um valor de selectbox de português para inglês."""
+    if not valor:
+        return valor
+    return TRADUCAO_PT_EN.get(valor, valor)
+
+
+def traduzir_valor_para_portugues(valor: str) -> str:
+    """Traduz um valor de selectbox de inglês para português."""
+    if not valor:
+        return valor
+    return TRADUCAO_EN_PT.get(valor, valor)
+
+
+def traduzir_desvio_para_ingles(desvio: dict) -> dict:
+    """Traduz os campos de selectbox de um desvio para inglês."""
+    campos_traduzir = [
+        'status', 'importancia', 'recorrencia', 'escopo',
+        'atendeu_prazos_report', 'formulario_arquivado', 'formulario_status'
+    ]
+    desvio_traduzido = desvio.copy()
+    for campo in campos_traduzir:
+        if campo in desvio_traduzido and desvio_traduzido[campo]:
+            desvio_traduzido[campo] = traduzir_valor_para_ingles(desvio_traduzido[campo])
+    return desvio_traduzido
+
+
+def traduzir_desvios_para_ingles(desvios: list[dict]) -> list[dict]:
+    """Traduz uma lista de desvios para inglês."""
+    return [traduzir_desvio_para_ingles(d) for d in desvios]
+
+
+def get_campo_display_name(campo: str) -> str:
+    """Retorna o nome de exibição de um campo."""
+    return CAMPOS_DISPLAY_NAMES.get(campo, campo.replace('_', ' ').title())
+
+
+def enviar_email_notificacao_desvio(
+    estudo_id: int,
+    estudo_codigo: str,
+    estudo_nome: str,
+    desvio_id: int,
+    numero_desvio: int,
+    alteracoes: list[dict],  # Lista de {'campo': str, 'valor_antigo': any, 'valor_novo': any}
+    alterado_por: str
+):
+    """Envia email de notificação para todos os participantes do estudo quando um desvio é modificado."""
+    try:
+        # Configurações de email do secrets.toml
+        email_config = st.secrets.get("email", {})
+        smtp_server = email_config.get("smtp_server")
+        smtp_port = email_config.get("smtp_port", 587)
+        sender = email_config.get("sender")
+        password = email_config.get("password")
+
+        if not all([smtp_server, sender, password]):
+            logging.warning("Configurações de email incompletas no secrets.toml")
+            return False
+
+        # Destinatários
+        destinatarios = get_emails_do_estudo(estudo_id)
+        if not destinatarios:
+            logging.info("Nenhum destinatário para notificação de desvio")
+            return True
+
+        # Monta o email
+        assunto = f"[Desvio Modificado] {estudo_codigo} - Desvio {numero_desvio}"
+
+        # Monta a tabela de alterações
+        alteracoes_html = ""
+        for alt in alteracoes:
+            campo_display = get_campo_display_name(alt['campo'])
+            valor_antigo = alt.get('valor_antigo') or '-'
+            valor_novo = alt.get('valor_novo') or '-'
+            alteracoes_html += f"""
+                <tr>
+                    <td style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0; font-weight: 500; color: #333;">{campo_display}</td>
+                    <td style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0; color: #999; text-decoration: line-through;">{valor_antigo}</td>
+                    <td style="padding: 12px 15px; border-bottom: 1px solid #e0e0e0; color: #2e7d32; font-weight: 500;">{valor_novo}</td>
+                </tr>
+            """
+
+        corpo_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+        </head>
+        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f5f5;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 30px 0;">
+                <tr>
+                    <td align="center">
+                        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); overflow: hidden;">
+
+                            <!-- Header -->
+                            <tr>
+                                <td style="background: linear-gradient(135deg, #6BBF47 0%, #52B54B 100%); padding: 30px 40px; text-align: center;">
+                                    <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">
+                                        🔔 Notificação de Alteração
+                                    </h1>
+                                    <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">
+                                        Portal Pesquisa Clínica
+                                    </p>
+                                </td>
+                            </tr>
+
+                            <!-- Content -->
+                            <tr>
+                                <td style="padding: 40px;">
+
+                                    <!-- Info Cards -->
+                                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 30px;">
+                                        <tr>
+                                            <td style="padding: 15px; background-color: #f8f9fa; border-radius: 8px; border-left: 4px solid #6BBF47;">
+                                                <table width="100%" cellpadding="0" cellspacing="0">
+                                                    <tr>
+                                                        <td width="50%" style="padding: 8px 0;">
+                                                            <span style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Estudo</span><br>
+                                                            <span style="color: #333; font-size: 16px; font-weight: 600;">{estudo_codigo}</span><br>
+                                                            <span style="color: #666; font-size: 13px;">{estudo_nome}</span>
+                                                        </td>
+                                                        <td width="50%" style="padding: 8px 0; text-align: right;">
+                                                            <span style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Desvio ID</span><br>
+                                                            <span style="color: #6BBF47; font-size: 24px; font-weight: 700;">{numero_desvio}</span>
+                                                        </td>
+                                                    </tr>
+                                                </table>
+                                            </td>
+                                        </tr>
+                                    </table>
+
+                                    <!-- Meta Info -->
+                                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 25px;">
+                                        <tr>
+                                            <td style="padding: 10px 0; border-bottom: 1px solid #eee;">
+                                                <span style="color: #999; font-size: 13px;">👤 Alterado por:</span>
+                                                <span style="color: #333; font-size: 14px; font-weight: 500; margin-left: 10px;">{alterado_por}</span>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 10px 0;">
+                                                <span style="color: #999; font-size: 13px;">📅 Data/Hora:</span>
+                                                <span style="color: #333; font-size: 14px; font-weight: 500; margin-left: 10px;">{datetime.now().strftime('%d/%m/%Y às %H:%M')}</span>
+                                            </td>
+                                        </tr>
+                                    </table>
+
+                                    <!-- Changes Table -->
+                                    <h3 style="margin: 0 0 15px; color: #333; font-size: 16px; font-weight: 600;">
+                                        📝 Campos Alterados
+                                    </h3>
+                                    <table width="100%" cellpadding="0" cellspacing="0" style="border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+                                        <tr style="background-color: #f8f9fa;">
+                                            <th style="padding: 12px 15px; text-align: left; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0;">Campo</th>
+                                            <th style="padding: 12px 15px; text-align: left; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0;">Antes</th>
+                                            <th style="padding: 12px 15px; text-align: left; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0;">Depois</th>
+                                        </tr>
+                                        {alteracoes_html}
+                                    </table>
+
+                                </td>
+                            </tr>
+
+                            <!-- Footer -->
+                            <tr>
+                                <td style="background-color: #f8f9fa; padding: 25px 40px; text-align: center; border-top: 1px solid #eee;">
+                                    <p style="margin: 0; color: #999; font-size: 12px;">
+                                        Este é um email automático do sistema Portal Pesquisa Clínica.<br>
+                                        Por favor, não responda a este email.
+                                    </p>
+                                    <p style="margin: 15px 0 0; color: #6BBF47; font-size: 11px; font-weight: 600;">
+                                        © {datetime.now().year} Synvia
+                                    </p>
+                                </td>
+                            </tr>
+
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        """
+
+        # Envia para cada destinatário
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender, password)
+
+            for destinatario in destinatarios:
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = assunto
+                msg['From'] = sender
+                msg['To'] = destinatario
+
+                msg.attach(MIMEText(corpo_html, 'html'))
+
+                server.sendmail(sender, destinatario, msg.as_string())
+
+        logging.info(f"Email de notificação enviado para {len(destinatarios)} destinatário(s)")
+        return True
+
+    except Exception as e:
+        logging.error(f"Erro ao enviar email de notificação: {e}")
+        return False
+
+
 # -------------------------------------------------
 # Constantes de Perfis e Permissões
 # -------------------------------------------------
-PERFIS_DISPONIVEIS = ["Monitora", "Gerente", "Gerente de Projetos", "Dev"]
+PERFIS_DISPONIVEIS = ["Administrador", "Usuário"]
 
 # Campos editáveis por Monitora (26 campos operacionais)
 CAMPOS_MONITORA = [
@@ -682,12 +1065,12 @@ CAMPOS_SISTEMA = [
 
 def get_campos_editaveis_por_perfil(perfil: str) -> list[str]:
     """Retorna lista de campos editáveis baseado no perfil do usuário."""
-    if perfil in ["Gerente", "Gerente de Projetos"]:
-        return CAMPOS_GERENTE
-    elif perfil == "Monitora":
+    if perfil == "Administrador":
+        # Administrador pode editar todos os campos (monitora + gerente)
+        return list(set(CAMPOS_MONITORA + CAMPOS_GERENTE))
+    elif perfil == "Usuário":
+        # Usuário pode editar os campos operacionais (como monitora)
         return CAMPOS_MONITORA
-    elif perfil == "Dev":
-        return []  # Dev visualiza tudo, não edita nada
     else:
         return []  # Perfil desconhecido não edita nada
 
@@ -715,7 +1098,7 @@ def load_usuarios() -> pd.DataFrame:
     try:
         conn = get_connection()
         query = """
-            SELECT id, nome, email, cargo, tipo_acesso, perfil
+            SELECT id, nome, email, cargo, perfil
             FROM usuarios
             ORDER BY perfil, nome
         """
@@ -727,7 +1110,7 @@ def load_usuarios() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def criar_usuario(nome: str, email: str, cargo: str, tipo_acesso: str, perfil: str) -> bool:
+def criar_usuario(nome: str, email: str, cargo: str, perfil: str) -> bool:
     """Cadastra um novo usuário."""
     try:
         conn = get_connection()
@@ -740,9 +1123,9 @@ def criar_usuario(nome: str, email: str, cargo: str, tipo_acesso: str, perfil: s
             conn.close()
             return False
         cursor.execute(
-            """INSERT INTO usuarios (nome, email, cargo, tipo_acesso, perfil)
-               VALUES (%s, %s, %s, %s, %s)""",
-            (nome.strip(), email.lower(), cargo, tipo_acesso, perfil)
+            """INSERT INTO usuarios (nome, email, cargo, perfil)
+               VALUES (%s, %s, %s, %s)""",
+            (nome.strip(), email.lower(), cargo, perfil)
         )
         conn.commit()
         cursor.close()
@@ -753,15 +1136,15 @@ def criar_usuario(nome: str, email: str, cargo: str, tipo_acesso: str, perfil: s
         return False
 
 
-def atualizar_usuario(user_id: int, nome: str, cargo: str, tipo_acesso: str, perfil: str, current_user_email: str) -> bool:
+def atualizar_usuario(user_id: int, nome: str, cargo: str, perfil: str, current_user_email: str) -> bool:
     """Atualiza um usuário existente."""
     try:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """UPDATE usuarios SET nome = %s, cargo = %s, tipo_acesso = %s, perfil = %s
+            """UPDATE usuarios SET nome = %s, cargo = %s, perfil = %s
                WHERE id = %s""",
-            (nome.strip(), cargo, tipo_acesso, perfil, user_id)
+            (nome.strip(), cargo, perfil, user_id)
         )
         conn.commit()
         cursor.close()
@@ -799,15 +1182,48 @@ def remover_usuario(user_id: int, current_user_email: str) -> bool:
 # Tela: Meus Estudos (Home) - Cards em Grid
 # -------------------------------------------------
 def render_meus_estudos(user_email: str):
-    st.title("🧪 Portal Pesquisa Clínica")
+    col_title, col_reload = st.columns([6, 1])
+    with col_title:
+        st.title("🧪 Portal Pesquisa Clínica")
+    with col_reload:
+        st.write("")
+        if st.button("🔄", key="reload_estudos", help="Atualizar lista de estudos"):
+            load_estudos_do_monitor.clear()
+            load_estudos_do_gerente_medico.clear()
+            is_gerente_medico.clear()
+            st.rerun()
 
-    df = load_estudos_do_monitor(user_email)
+    with st.spinner("Carregando estudos..."):
+        # Verifica se o usuário é um Gerente Médico
+        usuario_eh_gm = is_gerente_medico(user_email)
+
+        # Carrega estudos como monitor
+        df_monitor = load_estudos_do_monitor(user_email)
+
+        # Se for GM, carrega também os estudos como GM
+        if usuario_eh_gm:
+            df_gm = load_estudos_do_gerente_medico(user_email)
+            # Combina os dataframes removendo duplicatas (caso seja monitor e GM no mesmo estudo)
+            df = pd.concat([df_monitor, df_gm]).drop_duplicates(subset=['id']).reset_index(drop=True)
+        else:
+            df = df_monitor
 
     if df.empty:
         st.info("Você não está alocado em nenhum estudo ativo no momento.")
         return
 
-    st.caption(f"{len(df)} estudo(s) ativo(s)")
+    # Adiciona coluna de pendências para cada estudo
+    df['pendencias'] = df['id'].apply(contar_pendencias_do_estudo)
+
+    # Ordena: primeiro os com pendências (decrescente), depois os sem
+    df = df.sort_values(by='pendencias', ascending=False)
+
+    # Conta total de pendências
+    total_pendencias = df['pendencias'].sum()
+    if total_pendencias > 0:
+        st.caption(f"{len(df)} estudo(s) ativo(s) • 🔴 {total_pendencias} pendência(s) total")
+    else:
+        st.caption(f"{len(df)} estudo(s) ativo(s)")
 
     # Grid de cards (3 colunas)
     cols_per_row = 3
@@ -820,6 +1236,14 @@ def render_meus_estudos(user_email: str):
                 with st.container(border=True):
                     st.markdown(f"**{estudo['codigo']}**")
                     st.caption(estudo['nome'])
+
+                    # Exibe status de pendências
+                    pendencias = estudo['pendencias']
+                    if pendencias > 0:
+                        st.markdown(f"🔴 **{pendencias}** pendência(s)")
+                    else:
+                        st.markdown("🟢 Sem pendências")
+
                     if st.button("Entrar", key=f"entrar_{estudo['id']}", use_container_width=True):
                         st.session_state["estudo_ativo_id"] = estudo['id']
                         st.session_state["pagina_estudo"] = "menu"
@@ -902,13 +1326,15 @@ def render_desvios_estudo(estudo: dict, display_name: str, user_email: str):
         if st.button("🔄 Atualizar", use_container_width=True):
             st.session_state.pop(cache_key, None)
             st.session_state.pop(cache_key_orig, None)
+            load_desvios_do_estudo.clear()
             st.rerun()
 
     # Carrega dados
     if cache_key not in st.session_state:
-        df = load_desvios_do_estudo(estudo['id'])
-        st.session_state[cache_key] = df
-        st.session_state[cache_key_orig] = df.copy()
+        with st.spinner("Carregando desvios..."):
+            df = load_desvios_do_estudo(estudo['id'])
+            st.session_state[cache_key] = df
+            st.session_state[cache_key_orig] = df.copy()
 
     df_full = st.session_state[cache_key]
 
@@ -1041,6 +1467,37 @@ def render_desvios_estudo(estudo: dict, display_name: str, user_email: str):
             valores_originais=desvio
         )
 
+    # Botão de excluir desvio (soft delete) - apenas para Administradores
+    if perfil_usuario == "Administrador":
+        st.markdown("")
+        st.markdown("---")
+        st.markdown("### ⚠️ Zona de Perigo")
+
+        col_del1, col_del2 = st.columns([3, 1])
+        with col_del1:
+            st.caption(f"Excluir permanentemente o desvio #{desvio['numero_desvio_estudo']}. Esta ação não pode ser desfeita.")
+        with col_del2:
+            if st.button("🗑️ Excluir Desvio", key=f"btn_del_desvio_{desvio['id']}", type="secondary", use_container_width=True):
+                st.session_state[f"confirmar_exclusao_{desvio['id']}"] = True
+
+        # Modal de confirmação
+        if st.session_state.get(f"confirmar_exclusao_{desvio['id']}", False):
+            with st.container(border=True):
+                st.warning(f"Tem certeza que deseja excluir o desvio #{desvio['numero_desvio_estudo']}?")
+                col_conf1, col_conf2 = st.columns(2)
+                with col_conf1:
+                    if st.button("✅ Sim, excluir", key=f"confirma_del_{desvio['id']}", type="primary", use_container_width=True):
+                        if soft_delete_desvio(desvio['id'], estudo['id'], display_name):
+                            st.success("Desvio excluído com sucesso!")
+                            st.session_state.pop(f"confirmar_exclusao_{desvio['id']}", None)
+                            st.session_state.pop(f"desvios_df_{estudo['id']}", None)
+                            st.session_state.pop(f"desvios_df_orig_{estudo['id']}", None)
+                            st.rerun()
+                with col_conf2:
+                    if st.button("❌ Cancelar", key=f"cancela_del_{desvio['id']}", use_container_width=True):
+                        st.session_state.pop(f"confirmar_exclusao_{desvio['id']}", None)
+                        st.rerun()
+
 
 def exibir_detalhes_desvio(desvio: dict):
     """Exibe os detalhes do desvio em formato de cards somente leitura"""
@@ -1116,7 +1573,20 @@ def salvar_edicao_desvio(desvio_id: int, row_version, estudo_id: int, display_na
 
         # Filtra apenas campos que o usuário pode editar e que foram alterados
         campos_alterados = []
+        alteracoes_detalhadas = []  # Lista de {'campo', 'valor_antigo', 'valor_novo'}
         valores = []
+
+        # Campos que possuem coluna equivalente em inglês
+        campos_com_en = {
+            'formulario_status': 'formulario_status_en',
+            'importancia': 'importancia_en',
+            'recorrencia': 'recorrencia_en',
+            'escopo': 'escopo_en',
+            'atendeu_prazos_report': 'atendeu_prazos_report_en',
+            'formulario_arquivado': 'formulario_arquivado_en',
+            'prazo_escalonamento': 'prazo_escalonamento_en',
+            'populacao': 'populacao_en',
+        }
 
         for campo, novo_valor in novos_valores.items():
             if campo in campos_editaveis:
@@ -1124,8 +1594,18 @@ def salvar_edicao_desvio(desvio_id: int, row_version, estudo_id: int, display_na
                 if str(novo_valor or '') != str(valor_original or ''):
                     campos_alterados.append(campo)
                     valores.append(novo_valor if novo_valor else None)
+                    # Se o campo tem versão em inglês, adiciona também
+                    if campo in campos_com_en:
+                        campos_alterados.append(campos_com_en[campo])
+                        valores.append(traduzir_valor_para_ingles(novo_valor) if novo_valor else None)
                     # Registra log
                     registrar_log(cursor, desvio_id, estudo_id, display_name, campo, valor_original, novo_valor)
+                    # Guarda para o email
+                    alteracoes_detalhadas.append({
+                        'campo': campo,
+                        'valor_antigo': valor_original,
+                        'valor_novo': novo_valor
+                    })
 
         if not campos_alterados:
             st.info("Nenhuma alteração detectada.")
@@ -1135,7 +1615,7 @@ def salvar_edicao_desvio(desvio_id: int, row_version, estudo_id: int, display_na
 
         # Monta UPDATE
         set_clause = ", ".join([f"{campo} = %s" for campo in campos_alterados])
-        set_clause += ", atualizado_por = %s, data_atualizacao = NOW(), status = 'Modificado'"
+        set_clause += ", atualizado_por = %s, data_atualizacao = NOW(), status = 'Modificado', status_en = 'Modified'"
         valores.append(display_name)
         valores.append(desvio_id)
         valores.append(row_version)
@@ -1152,6 +1632,25 @@ def salvar_edicao_desvio(desvio_id: int, row_version, estudo_id: int, display_na
             # Limpa cache
             st.session_state.pop(f"desvios_df_{estudo_id}", None)
             st.session_state.pop(f"desvios_df_orig_{estudo_id}", None)
+            load_desvios_do_estudo.clear()
+
+            # Envia notificação por email
+            try:
+                cursor.execute("SELECT numero_desvio_estudo FROM desvios WHERE id = %s", (desvio_id,))
+                numero_desvio = cursor.fetchone()[0] or desvio_id
+                estudo = get_estudo_by_id(estudo_id)
+                if estudo:
+                    enviar_email_notificacao_desvio(
+                        estudo_id=estudo_id,
+                        estudo_codigo=estudo['codigo'],
+                        estudo_nome=estudo['nome'],
+                        desvio_id=desvio_id,
+                        numero_desvio=numero_desvio,
+                        alteracoes=alteracoes_detalhadas,
+                        alterado_por=display_name
+                    )
+            except Exception as email_err:
+                logging.error(f"Erro ao enviar email de notificação: {email_err}")
 
         cursor.close()
         conn.close()
@@ -1189,6 +1688,36 @@ def registrar_log(cursor, desvio_id: int, estudo_id: int, usuario: str, campo: s
            VALUES (%s, %s, %s, %s, %s, %s)""",
         (desvio_id, estudo_id, usuario, campo, str(valor_antigo) if valor_antigo else None, str(valor_novo) if valor_novo else None)
     )
+
+
+def soft_delete_desvio(desvio_id: int, estudo_id: int, deleted_by: str) -> bool:
+    """Realiza soft delete de um desvio (marca como excluído sem remover do banco)."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Atualiza o desvio com deleted_at e deleted_by
+        cursor.execute(
+            """UPDATE desvios
+               SET deleted_at = NOW(), deleted_by = %s
+               WHERE id = %s""",
+            (deleted_by, desvio_id)
+        )
+
+        # Registra no log
+        registrar_log(cursor, desvio_id, estudo_id, deleted_by, "EXCLUSÃO", "Ativo", "Excluído")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Limpa cache
+        load_desvios_do_estudo.clear()
+
+        return True
+    except Exception as e:
+        st.error(f"Erro ao excluir desvio: {e}")
+        return False
 
 
 def save_desvios_changes(edited_df, original_df, display_name, estudo_id):
@@ -1269,6 +1798,27 @@ def save_desvios_changes(edited_df, original_df, display_name, estudo_id):
 
         if atualizados:
             st.success(f"{atualizados} registro(s) atualizado(s)! ✅")
+
+            # Envia notificação por email (consolidada para edições em lote)
+            try:
+                estudo = get_estudo_by_id(estudo_id)
+                if estudo:
+                    enviar_email_notificacao_desvio(
+                        estudo_id=estudo_id,
+                        estudo_codigo=estudo['codigo'],
+                        estudo_nome=estudo['nome'],
+                        desvio_id=0,
+                        numero_desvio=atualizados,  # Número de registros alterados
+                        alteracoes=[{
+                            'campo': 'Edição em Lote',
+                            'valor_antigo': '-',
+                            'valor_novo': f'{atualizados} desvio(s) modificado(s) via tabela'
+                        }],
+                        alterado_por=display_name
+                    )
+            except Exception as email_err:
+                logging.error(f"Erro ao enviar email de notificação: {email_err}")
+
         if conflitos:
             st.warning(f"{len(conflitos)} registro(s) com conflito. Recarregue os dados.")
 
@@ -1423,11 +1973,15 @@ def render_cadastro_desvio(estudo: dict, user_email: str, display_name: str):
                         formulario_arquivado, recorrencia, num_ocorrencia_previa,
                         prazo_escalonamento, data_escalonamento, atendeu_prazos_report,
                         motivo_nao_atendeu_prazo, populacao, data_submissao_cep, data_finalizacao,
-                        criado_por_nome, criado_por_email, url_anexo
+                        criado_por_nome, criado_por_email, url_anexo,
+                        status_en, formulario_status_en, importancia_en, recorrencia_en,
+                        escopo_en, atendeu_prazos_report_en, formulario_arquivado_en,
+                        prazo_escalonamento_en, populacao_en
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                 """
 
@@ -1441,7 +1995,17 @@ def render_cadastro_desvio(estudo: dict, user_email: str, display_name: str):
                     prazo_escalonamento, data_escalonamento, prazo_report,
                     motivo_nao_atendeu_prazo.strip() if motivo_nao_atendeu_prazo else None,
                     populacao, data_cep, data_finalizacao,
-                    display_name, user_email, url_anexo
+                    display_name, user_email, url_anexo,
+                    # Colunas em inglês
+                    'New',  # status_en
+                    traduzir_valor_para_ingles(formulario),  # formulario_status_en
+                    traduzir_valor_para_ingles(importancia),  # importancia_en
+                    traduzir_valor_para_ingles(recorrencia),  # recorrencia_en
+                    traduzir_valor_para_ingles(escopo),  # escopo_en
+                    traduzir_valor_para_ingles(prazo_report),  # atendeu_prazos_report_en
+                    traduzir_valor_para_ingles(arquivado),  # formulario_arquivado_en
+                    traduzir_valor_para_ingles(prazo_escalonamento),  # prazo_escalonamento_en
+                    traduzir_valor_para_ingles(populacao),  # populacao_en
                 )
 
                 cursor.execute(sql, values)
@@ -1454,6 +2018,7 @@ def render_cadastro_desvio(estudo: dict, user_email: str, display_name: str):
                 # Limpa cache de desvios desse estudo
                 st.session_state.pop(f"desvios_df_{estudo['id']}", None)
                 st.session_state.pop(f"desvios_df_orig_{estudo['id']}", None)
+                load_desvios_do_estudo.clear()
 
             except Exception as e:
                 st.error(f"Erro ao cadastrar: {e}")
@@ -1465,7 +2030,7 @@ def render_cadastro_desvio(estudo: dict, user_email: str, display_name: str):
 def render_painel_adm(pode_acessar: bool, user_email: str):
     st.subheader("🛠 Painel Administrativo")
     if not pode_acessar:
-        st.error("Acesso restrito a Gerentes e Gerentes de Projetos.")
+        st.error("Acesso restrito a Administradores.")
         return
 
     # Tabs para organizar as seções
@@ -1495,7 +2060,21 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
                     else:
                         st.warning("Preencha código e nome.")
 
-        df_estudos = load_todos_estudos()
+        st.markdown("")
+        st.markdown("")
+        st.markdown("")
+
+        col_title, col_reload = st.columns([6, 1])
+        with col_title:
+            st.markdown("### Estudos Cadastrados")
+        with col_reload:
+            if st.button("🔄", key="reload_estudos_adm", help="Atualizar lista"):
+                load_todos_estudos.clear()
+                st.rerun()
+
+        with st.spinner("Carregando estudos..."):
+            df_estudos = load_todos_estudos()
+
         if not df_estudos.empty:
             col_filtro1, col_filtro2 = st.columns([3, 1])
             with col_filtro1:
@@ -1515,10 +2094,11 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
 
             for _, est in df_filtrado.iterrows():
                 with st.expander(f"{'🟢' if est['status'] == 'ativo' else '🔴'} {est['codigo']} - {est['nome']}"):
-                    df_monitores_est = load_monitores_do_estudo(est['id'])
-                    if not df_monitores_est.empty:
-                        monitores_list = [mon['monitor_nome'] or mon['monitor_email'] for _, mon in df_monitores_est.iterrows()]
-                        st.caption(f"👥 {', '.join(monitores_list)}")
+                    gm_estudo = get_gerente_medico_do_estudo(est['id'])
+                    if gm_estudo:
+                        st.caption(f"🩺 {gm_estudo['nome']}")
+                    else:
+                        st.caption("🩺 _Nenhum GM alocado_")
 
                     with st.form(f"form_edit_estudo_{est['id']}"):
                         col1, col2, col3 = st.columns([2, 3, 2])
@@ -1557,6 +2137,10 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
                             st.success("Monitor alocado!")
                             load_monitores_do_estudo.clear()
                             st.rerun()
+            
+            st.markdown("")
+            st.markdown("")
+            st.markdown("### Monitores Alocados")
 
             df_monitores = load_monitores_do_estudo(estudo_id_selecionado)
             if df_monitores.empty:
@@ -1596,10 +2180,18 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
                     else:
                         st.warning("Preencha todos os campos.")
 
+        st.markdown("")
+        st.markdown("")
+        st.markdown("### Alocar Gerente Médico a Estudo")
+
         df_estudos = load_todos_estudos()
         df_gerentes = load_gerentes_medicos()
 
-        if not df_estudos.empty and not df_gerentes.empty:
+        if df_estudos.empty:
+            st.info("Nenhum estudo cadastrado.")
+        elif df_gerentes.empty:
+            st.info("Nenhum gerente médico cadastrado. Cadastre um gerente acima para alocar.")
+        else:
             col1, col2, col3 = st.columns([3, 3, 2])
             with col1:
                 opcoes_estudos_gm = {f"{row['codigo']} - {row['nome']}": row['id'] for _, row in df_estudos.iterrows()}
@@ -1624,21 +2216,64 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
 
             if gerente_atual:
                 st.caption(f"Atual: {gerente_atual['nome']}")
+            else:
+                st.caption("Nenhum GM alocado neste estudo")
+        
+        st.markdown("")
+        st.markdown("")
 
-        if not df_gerentes.empty:
-            for _, gm in df_gerentes.iterrows():
-                col1, col2, col3, col4 = st.columns([3, 3, 3, 1])
-                with col1:
-                    st.write(gm['nome'])
-                with col2:
-                    st.caption(gm['email'])
-                with col3:
-                    st.caption(f"🏢 {gm.get('patrocinador', '') or ''}")
-                with col4:
-                    if st.button("🗑️", key=f"rem_gm_{gm['id']}"):
-                        if remover_gerente_medico(gm['id']):
-                            load_gerentes_medicos.clear()
-                            st.rerun()
+        with st.expander(f"📋 Gerentes Médicos Cadastrados ({len(df_gerentes)})", expanded=False):
+            if not df_gerentes.empty:
+                # Selectbox para filtrar por nome
+                opcoes_nomes = ["Todos"] + df_gerentes['nome'].tolist()
+                filtro_gm = st.selectbox(
+                    "Filtrar por nome",
+                    opcoes_nomes,
+                    key="filtro_gerente_medico",
+                    label_visibility="collapsed"
+                )
+
+                # Filtra os gerentes
+                df_filtrado = df_gerentes.copy()
+                if filtro_gm != "Todos":
+                    df_filtrado = df_filtrado[df_filtrado['nome'] == filtro_gm]
+
+                st.markdown("")
+
+                if df_filtrado.empty:
+                    st.info("Nenhum gerente médico encontrado.")
+                else:
+                    for _, gm in df_filtrado.iterrows():
+                        estudos_gm = get_estudos_do_gerente_medico_por_id(gm['id'])
+
+                        with st.container(border=True):
+                            col_info, col_acoes = st.columns([11, 1])
+
+                            with col_info:
+                                st.markdown(f"**🩺 {gm['nome']}**")
+
+                                col_det1, col_det2 = st.columns(2)
+                                with col_det1:
+                                    st.caption(f"📧 {gm['email']}")
+                                with col_det2:
+                                    patrocinador = gm.get('patrocinador', '') or ''
+                                    if patrocinador:
+                                        st.caption(f"🏢 {patrocinador}")
+
+                                if estudos_gm:
+                                    estudos_badges = " ".join([f"`{e}`" for e in estudos_gm])
+                                    st.markdown(f"📋 Estudos: {estudos_badges}")
+                                else:
+                                    st.caption("📋 _Nenhum estudo alocado_")
+
+                            with col_acoes:
+                                st.markdown("")
+                                if st.button("🗑️", key=f"rem_gm_{gm['id']}", help="Remover gerente médico"):
+                                    if remover_gerente_medico(gm['id']):
+                                        load_gerentes_medicos.clear()
+                                        st.rerun()
+            else:
+                st.info("Nenhum gerente médico cadastrado.")
 
     # ----- TAB: Usuários -----
     with tab_admins:
@@ -1656,11 +2291,15 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
                 st.write("")
                 if st.form_submit_button("➕", type="primary", use_container_width=True):
                     if novo_nome and novo_email:
-                        if criar_usuario(novo_nome, novo_email, novo_cargo, "Interno", novo_perfil):
+                        if criar_usuario(novo_nome, novo_email, novo_cargo, novo_perfil):
                             load_usuarios.clear()
                             st.rerun()
                     else:
                         st.warning("Preencha nome e email.")
+        
+        st.markdown("")
+        st.markdown("")
+        st.markdown("### Usuários Cadastrados")
 
         df_usuarios = load_usuarios()
         if not df_usuarios.empty:
@@ -1680,10 +2319,8 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
 
             # Badges de perfil
             perfil_badges = {
-                "Dev": "💻",
-                "Gerente": "👔",
-                "Gerente de Projetos": "📊",
-                "Monitora": "👤"
+                "Administrador": "👑",
+                "Usuário": "👤"
             }
 
             for _, usr in df_filtrado.iterrows():
@@ -1696,12 +2333,6 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
                             edit_nome = st.text_input("Nome", value=usr['nome'], key=f"unome_{usr['id']}")
                             edit_cargo = st.text_input("Cargo", value=usr['cargo'] or "", key=f"ucargo_{usr['id']}")
                         with col2:
-                            edit_tipo = st.selectbox(
-                                "Tipo de Acesso",
-                                ["Interno", "Externo"],
-                                index=0 if usr['tipo_acesso'] == 'Interno' else 1,
-                                key=f"utipo_{usr['id']}"
-                            )
                             perfis_lista = PERFIS_DISPONIVEIS
                             perfil_index = perfis_lista.index(usr['perfil']) if usr['perfil'] in perfis_lista else 0
                             edit_perfil = st.selectbox(
@@ -1714,7 +2345,7 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
                         col_save, col_del = st.columns([3, 1])
                         with col_save:
                             if st.form_submit_button("Salvar", use_container_width=True):
-                                if atualizar_usuario(usr['id'], edit_nome, edit_cargo, edit_tipo, edit_perfil, user_email):
+                                if atualizar_usuario(usr['id'], edit_nome, edit_cargo, edit_perfil, user_email):
                                     st.success("Usuário atualizado!")
                                     st.rerun()
                         with col_del:
