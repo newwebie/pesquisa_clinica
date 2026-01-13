@@ -813,9 +813,24 @@ TRADUCAO_PT_EN = {
     'Mensal': 'Monthly',
     'Padrão': 'Default',
     'Imediato': 'Immediate',
+    'Imediata': 'Immediate',
     # População
     'Intenção de Tratar (ITT)': 'ITT',
     'Por Protocolo (PP)': 'Per Protocol',
+    # Categoria
+    'Avaliações': 'Assessments',
+    'Consentimento informado': 'Informed Consent',
+    'Procedimentos': 'Procedures',
+    'PSI': 'PSI',
+    'Segurança': 'Safety',
+    'Outros': 'Others',
+    # Subcategoria
+    'Avaliações Perdidas ou não realizadas': 'Missed or not performed assessments',
+    'Avaliações realizadas fora da janela': 'Assessments performed outside the window',
+    'Desvios Recorrentes': 'Recurring Deviations',
+    'Visitas perdidas ou fora da janela': 'Missed visits or outside the window',
+    'Amostras Laboratoriais': 'Laboratory Samples',
+    'Critérios de Inclusão / Exclusão (Elegibilidade)': 'Inclusion / Exclusion Criteria (Eligibility)',
 }
 
 # Mapeamento inverso EN -> PT (para quando precisar converter de volta)
@@ -1034,50 +1049,106 @@ def enviar_email_notificacao_desvio(
 # -------------------------------------------------
 PERFIS_DISPONIVEIS = ["Administrador", "Usuário"]
 
-# Campos editáveis por Monitora (26 campos operacionais)
-CAMPOS_MONITORA = [
-    'participante', 'data_ocorrido', 'formulario_status', 'identificacao_desvio',
-    'centro', 'visita', 'causa_raiz', 'acao_preventiva', 'acao_corretiva',
-    'importancia', 'data_identificacao_texto', 'categoria', 'subcategoria',
-    'codigo', 'recorrencia', 'num_ocorrencia_previa', 'escopo',
-    'prazo_escalonamento', 'data_escalonamento', 'atendeu_prazos_report',
-    'avaliacao_investigador', 'formulario_arquivado', 'data_submissao_cep',
-    'data_finalizacao', 'populacao'
-]
-
-# Campos editáveis por Gerente/Gerente de Projetos (campos de análise/avaliação)
-CAMPOS_GERENTE = [
-    'descricao_desvio',           # Descrição do desvio
-    'causa_raiz',                 # Reporte de causa raiz
-    'acao_preventiva',            # Reporte de ação preventiva
-    'acao_corretiva',             # Reporte de ação corretiva
-    'importancia',                # Maior ou Menor
-    'avaliacao_gerente_medico',   # Avaliação Gerente Médico
-    'avaliacao_investigador',     # Avaliação Investigador
-]
-
 # Campos que nunca podem ser editados (controle do sistema)
 CAMPOS_SISTEMA = [
     'id', 'numero_desvio_estudo', 'status', 'criado_por_nome',
     'criado_por_email', 'atualizado_por', 'data_atualizacao', 'row_version', 'url_anexo'
 ]
 
+# Campos editáveis por cargo (para Administradores)
+# Se o cargo não estiver na lista, o administrador não pode editar nada
+CAMPOS_POR_CARGO = {
+    # Monitora - campos operacionais de cadastro e acompanhamento
+    'Monitora': [
+        'participante', 'data_ocorrido', 'formulario_status', 'identificacao_desvio',
+        'centro', 'visita', 'causa_raiz', 'acao_preventiva', 'acao_corretiva',
+        'importancia', 'data_identificacao_texto', 'categoria', 'subcategoria',
+        'codigo', 'recorrencia', 'num_ocorrencia_previa', 'escopo',
+        'prazo_escalonamento', 'data_escalonamento', 'atendeu_prazos_report',
+        'avaliacao_investigador', 'formulario_arquivado', 'data_submissao_cep',
+        'data_finalizacao', 'populacao', 'descricao_desvio'
+    ],
+    # Gerente de Projetos - campos de análise e gestão
+    'Gerente de Projetos': [
+        'descricao_desvio', 'causa_raiz', 'acao_preventiva', 'acao_corretiva',
+        'importancia', 'avaliacao_gerente_medico', 'avaliacao_investigador',
+        'categoria', 'subcategoria', 'escopo', 'recorrencia',
+        'prazo_escalonamento', 'atendeu_prazos_report', 'formulario_arquivado'
+    ],
+    # Gerente Médico - campos de avaliação médica
+    'Gerente Médico': [
+        'avaliacao_gerente_medico', 'importancia', 'descricao_desvio'
+    ],
+    # Coordenador - acesso amplo similar à monitora
+    'Coordenador': [
+        'participante', 'data_ocorrido', 'formulario_status', 'identificacao_desvio',
+        'centro', 'visita', 'causa_raiz', 'acao_preventiva', 'acao_corretiva',
+        'importancia', 'data_identificacao_texto', 'categoria', 'subcategoria',
+        'codigo', 'recorrencia', 'num_ocorrencia_previa', 'escopo',
+        'prazo_escalonamento', 'data_escalonamento', 'atendeu_prazos_report',
+        'avaliacao_investigador', 'formulario_arquivado', 'data_submissao_cep',
+        'data_finalizacao', 'populacao', 'descricao_desvio'
+    ],
+    # Analista de Qualidade - campos de controle e qualidade
+    'Analista de Qualidade': [
+        'formulario_status', 'formulario_arquivado', 'categoria', 'subcategoria',
+        'escopo', 'recorrencia', 'importancia', 'atendeu_prazos_report'
+    ],
+}
 
-def get_campos_editaveis_por_perfil(perfil: str) -> list[str]:
-    """Retorna lista de campos editáveis baseado no perfil do usuário."""
+# Campos padrão para perfil "Usuário" (não-administrador)
+CAMPOS_USUARIO_PADRAO = [
+    'participante', 'data_ocorrido', 'formulario_status', 'identificacao_desvio',
+    'centro', 'visita', 'causa_raiz', 'acao_preventiva', 'acao_corretiva',
+    'importancia', 'data_identificacao_texto', 'categoria', 'subcategoria',
+    'codigo', 'recorrencia', 'num_ocorrencia_previa', 'escopo',
+    'prazo_escalonamento', 'data_escalonamento', 'atendeu_prazos_report',
+    'avaliacao_investigador', 'formulario_arquivado', 'data_submissao_cep',
+    'data_finalizacao', 'populacao', 'descricao_desvio'
+]
+
+
+def get_user_cargo(email: str) -> str:
+    """Retorna o cargo do usuário pelo email."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT cargo FROM usuarios WHERE LOWER(email) = %s", (email.lower(),))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return row[0] if row and row[0] else ""
+    except:
+        return ""
+
+
+def get_campos_editaveis_por_cargo(cargo: str) -> list[str]:
+    """Retorna lista de campos editáveis baseado no cargo do administrador."""
+    if not cargo:
+        return []
+    # Verifica se o cargo existe no mapeamento (case insensitive)
+    for cargo_key, campos in CAMPOS_POR_CARGO.items():
+        if cargo.lower().strip() == cargo_key.lower().strip():
+            return campos
+    return []  # Cargo não mapeado = não pode editar nada
+
+
+def get_campos_editaveis_por_perfil_e_cargo(perfil: str, cargo: str) -> list[str]:
+    """Retorna lista de campos editáveis baseado no perfil e cargo do usuário."""
     if perfil == "Administrador":
-        # Administrador pode editar todos os campos (monitora + gerente)
-        return list(set(CAMPOS_MONITORA + CAMPOS_GERENTE))
+        # Administrador: permissões baseadas no cargo
+        campos = get_campos_editaveis_por_cargo(cargo)
+        return campos  # Retorna vazio se cargo não mapeado
     elif perfil == "Usuário":
-        # Usuário pode editar os campos operacionais (como monitora)
-        return CAMPOS_MONITORA
+        # Usuário comum: campos padrão operacionais
+        return CAMPOS_USUARIO_PADRAO
     else:
         return []  # Perfil desconhecido não edita nada
 
 
-def get_campos_nao_editaveis_para_display(perfil: str) -> list[str]:
+def get_campos_nao_editaveis_para_display(perfil: str, cargo: str = "") -> list[str]:
     """Retorna lista de nomes de colunas (display) que não podem ser editados."""
-    campos_editaveis = get_campos_editaveis_por_perfil(perfil)
+    campos_editaveis = get_campos_editaveis_por_perfil_e_cargo(perfil, cargo)
     rename_map = get_column_rename_map()
 
     # Todos os campos que NÃO estão na lista de editáveis
@@ -1305,9 +1376,10 @@ def get_column_rename_map() -> dict:
 
 
 def render_desvios_estudo(estudo: dict, display_name: str, user_email: str):
-    # Obtém perfil do usuário para aplicar permissões
+    # Obtém perfil e cargo do usuário para aplicar permissões
     perfil_usuario = get_user_perfil(user_email) or "Visualizador"
-    campos_editaveis = get_campos_editaveis_por_perfil(perfil_usuario)
+    cargo_usuario = get_user_cargo(user_email)
+    campos_editaveis = get_campos_editaveis_por_perfil_e_cargo(perfil_usuario, cargo_usuario)
 
     # Força reload se solicitado
     cache_key = f"desvios_df_{estudo['id']}"
@@ -1395,7 +1467,11 @@ def render_desvios_estudo(estudo: dict, display_name: str, user_email: str):
 
     # Formulário de edição
     st.subheader("Editar campos")
-    st.caption(f"Perfil: {perfil_usuario} ({len(campos_editaveis)} campos editáveis)")
+    info_cargo = f" | Cargo: {cargo_usuario}" if cargo_usuario else ""
+    if len(campos_editaveis) == 0:
+        st.warning(f"Seu cargo ({cargo_usuario or 'não definido'}) não possui permissão para editar campos de desvios.")
+    else:
+        st.caption(f"Perfil: {perfil_usuario}{info_cargo} ({len(campos_editaveis)} campos editáveis)")
 
     with st.form(f"form_editar_desvio_{desvio['id']}"):
         col1, col2 = st.columns(2)
@@ -1586,6 +1662,8 @@ def salvar_edicao_desvio(desvio_id: int, row_version, estudo_id: int, display_na
             'formulario_arquivado': 'formulario_arquivado_en',
             'prazo_escalonamento': 'prazo_escalonamento_en',
             'populacao': 'populacao_en',
+            'categoria': 'categoria_en',
+            'subcategoria': 'subcategoria_en',
         }
 
         for campo, novo_valor in novos_valores.items():
@@ -1976,12 +2054,12 @@ def render_cadastro_desvio(estudo: dict, user_email: str, display_name: str):
                         criado_por_nome, criado_por_email, url_anexo,
                         status_en, formulario_status_en, importancia_en, recorrencia_en,
                         escopo_en, atendeu_prazos_report_en, formulario_arquivado_en,
-                        prazo_escalonamento_en, populacao_en
+                        prazo_escalonamento_en, populacao_en, categoria_en, subcategoria_en
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                 """
 
@@ -2006,6 +2084,8 @@ def render_cadastro_desvio(estudo: dict, user_email: str, display_name: str):
                     traduzir_valor_para_ingles(arquivado),  # formulario_arquivado_en
                     traduzir_valor_para_ingles(prazo_escalonamento),  # prazo_escalonamento_en
                     traduzir_valor_para_ingles(populacao),  # populacao_en
+                    traduzir_valor_para_ingles(categoria),  # categoria_en
+                    traduzir_valor_para_ingles(subcategoria),  # subcategoria_en
                 )
 
                 cursor.execute(sql, values)
@@ -2357,8 +2437,600 @@ def render_painel_adm(pode_acessar: bool, user_email: str):
 
 def render_relatorios():
     st.subheader("📑 Relatórios & Auditoria")
-    st.write("Central de relatórios e audit log.")
-    st.info("Em desenvolvimento...")
+
+    # Mapeamento de nomes de colunas do banco para nomes amigáveis do front
+    MAPEAMENTO_COLUNAS_DESVIOS = {
+        'id': 'ID',
+        'numero_desvio_estudo': 'Nº Desvio',
+        'status': 'Status',
+        'participante': 'Participante',
+        'data_ocorrido': 'Data do Ocorrido',
+        'formulario_status': 'Formulário',
+        'identificacao_desvio': 'Identificação do Desvio',
+        'centro': 'Centro',
+        'visita': 'Visita',
+        'descricao_desvio': 'Descrição do Desvio',
+        'causa_raiz': 'Causa Raiz',
+        'acao_preventiva': 'Ação Preventiva',
+        'acao_corretiva': 'Ação Corretiva',
+        'importancia': 'Importância',
+        'data_identificacao_texto': 'Data de Identificação',
+        'categoria': 'Categoria',
+        'subcategoria': 'Subcategoria',
+        'codigo': 'Código',
+        'escopo': 'Escopo',
+        'avaliacao_gerente_medico': 'Avaliação Gerente Médico',
+        'avaliacao_investigador': 'Avaliação Investigador Principal',
+        'formulario_arquivado': 'Formulário Arquivado (ISF e TFM)?',
+        'recorrencia': 'Recorrência',
+        'num_ocorrencia_previa': 'Nº Desvio Ocorrência Prévia',
+        'prazo_escalonamento': 'Prazo para Escalonamento',
+        'data_escalonamento': 'Data de Escalonamento',
+        'atendeu_prazos_report': 'Atendeu os Prazos de Report?',
+        'populacao': 'População',
+        'data_submissao_cep': 'Data de Submissão ao CEP',
+        'data_finalizacao': 'Data de Finalização',
+        'criado_por_nome': 'Criado Por',
+        'criado_por_email': 'Email do Criador',
+        'atualizado_por': 'Atualizado Por',
+        'data_atualizacao': 'Data de Atualização',
+        'estudo_codigo': 'Estudo',
+        'estudo_nome': 'Nome do Estudo',
+        'motivo_nao_atendeu_prazo': 'Motivo (se não atendeu prazos)',
+    }
+
+    MAPEAMENTO_COLUNAS_LOGS = {
+        'id': 'ID',
+        'desvio_id': 'ID do Desvio',
+        'estudo_codigo': 'Estudo',
+        'usuario': 'Usuário',
+        'campo': 'Campo Alterado',
+        'valor_antigo': 'Valor Anterior',
+        'valor_novo': 'Novo Valor',
+        'data_alteracao': 'Data da Alteração',
+    }
+
+    # Mapeamento para traduzir nome do campo no log para nome amigável
+    MAPEAMENTO_NOME_CAMPO_LOG = {
+        'participante': 'Participante',
+        'centro': 'Centro',
+        'visita': 'Visita',
+        'identificacao_desvio': 'Identificação do Desvio',
+        'formulario_status': 'Formulário',
+        'importancia': 'Importância',
+        'categoria': 'Categoria',
+        'subcategoria': 'Subcategoria',
+        'escopo': 'Escopo',
+        'recorrencia': 'Recorrência',
+        'formulario_arquivado': 'Formulário Arquivado (ISF e TFM)?',
+        'descricao_desvio': 'Descrição do Desvio',
+        'causa_raiz': 'Causa Raiz',
+        'acao_preventiva': 'Ação Preventiva',
+        'acao_corretiva': 'Ação Corretiva',
+        'avaliacao_investigador': 'Avaliação Investigador Principal',
+        'avaliacao_gerente_medico': 'Avaliação Gerente Médico',
+        'prazo_escalonamento': 'Prazo para Escalonamento',
+        'data_escalonamento': 'Data de Escalonamento',
+        'atendeu_prazos_report': 'Atendeu os Prazos de Report?',
+        'populacao': 'População',
+        'data_submissao_cep': 'Data de Submissão ao CEP',
+        'data_finalizacao': 'Data de Finalização',
+        'data_ocorrido': 'Data do Ocorrido',
+        'data_identificacao_texto': 'Data de Identificação',
+        'codigo': 'Código',
+        'num_ocorrencia_previa': 'Nº Desvio Ocorrência Prévia',
+        'status': 'Status',
+        'EXCLUSÃO': 'EXCLUSÃO',
+    }
+
+    def renomear_colunas(df: pd.DataFrame, mapeamento: dict) -> pd.DataFrame:
+        """Renomeia as colunas do DataFrame conforme o mapeamento."""
+        colunas_existentes = {col: mapeamento.get(col, col) for col in df.columns}
+        return df.rename(columns=colunas_existentes)
+
+    def traduzir_campo_log(df: pd.DataFrame) -> pd.DataFrame:
+        """Traduz os nomes dos campos na coluna 'campo' do log."""
+        if 'campo' in df.columns:
+            df['campo'] = df['campo'].map(lambda x: MAPEAMENTO_NOME_CAMPO_LOG.get(x, x))
+        return df
+
+    # Tabs para separar Relatórios de Desvios e Logs
+    tab_desvios, tab_logs = st.tabs(["📊 Relatório de Desvios", "📋 Logs de Auditoria"])
+
+    # ===================================================================
+    # TAB 1: RELATÓRIO DE DESVIOS
+    # ===================================================================
+    with tab_desvios:
+        st.write("Extraia relatórios de desvios aplicando filtros conforme necessário.")
+
+        # Função para carregar opções de filtros (leve - só valores únicos)
+        @st.cache_data(ttl=300)
+        def load_opcoes_filtros():
+            try:
+                conn = get_connection()
+                opcoes = {}
+
+                # Estudos
+                df_estudos = pd.read_sql_query("SELECT DISTINCT codigo FROM estudos WHERE status = 'ativo' ORDER BY codigo", conn)
+                opcoes['estudos'] = df_estudos['codigo'].tolist()
+
+                # Centros
+                df_centros = pd.read_sql_query("SELECT DISTINCT centro FROM desvios WHERE centro IS NOT NULL AND deleted_at IS NULL ORDER BY centro", conn)
+                opcoes['centros'] = df_centros['centro'].tolist()
+
+                # Categorias
+                df_cat = pd.read_sql_query("SELECT DISTINCT categoria FROM desvios WHERE categoria IS NOT NULL AND deleted_at IS NULL ORDER BY categoria", conn)
+                opcoes['categorias'] = df_cat['categoria'].tolist()
+
+                # Escopos
+                df_esc = pd.read_sql_query("SELECT DISTINCT escopo FROM desvios WHERE escopo IS NOT NULL AND deleted_at IS NULL ORDER BY escopo", conn)
+                opcoes['escopos'] = df_esc['escopo'].tolist()
+
+                # Recorrências
+                df_rec = pd.read_sql_query("SELECT DISTINCT recorrencia FROM desvios WHERE recorrencia IS NOT NULL AND deleted_at IS NULL ORDER BY recorrencia", conn)
+                opcoes['recorrencias'] = df_rec['recorrencia'].tolist()
+
+                # Prazos de escalonamento
+                df_prazo = pd.read_sql_query("SELECT DISTINCT prazo_escalonamento FROM desvios WHERE prazo_escalonamento IS NOT NULL AND deleted_at IS NULL ORDER BY prazo_escalonamento", conn)
+                opcoes['prazos'] = df_prazo['prazo_escalonamento'].tolist()
+
+                # Populações
+                df_pop = pd.read_sql_query("SELECT DISTINCT populacao FROM desvios WHERE populacao IS NOT NULL AND deleted_at IS NULL ORDER BY populacao", conn)
+                opcoes['populacoes'] = df_pop['populacao'].tolist()
+
+                # Criadores
+                df_criador = pd.read_sql_query("SELECT DISTINCT criado_por_nome FROM desvios WHERE criado_por_nome IS NOT NULL AND deleted_at IS NULL ORDER BY criado_por_nome", conn)
+                opcoes['criadores'] = df_criador['criado_por_nome'].tolist()
+
+                conn.close()
+                return opcoes
+            except Exception as e:
+                st.error(f"Erro ao carregar opções: {e}")
+                return {}
+
+        # Função para gerar relatório com filtros
+        def gerar_relatorio_desvios(filtros: dict) -> pd.DataFrame:
+            try:
+                conn = get_connection()
+                query = """
+                    SELECT
+                        d.id, d.numero_desvio_estudo, d.status, d.participante, d.data_ocorrido, d.formulario_status,
+                        d.identificacao_desvio, d.centro, d.visita, d.descricao_desvio,
+                        d.causa_raiz, d.acao_preventiva, d.acao_corretiva, d.importancia,
+                        d.data_identificacao_texto, d.categoria, d.subcategoria, d.codigo,
+                        d.escopo, d.avaliacao_gerente_medico, d.avaliacao_investigador,
+                        d.formulario_arquivado, d.recorrencia, d.num_ocorrencia_previa,
+                        d.prazo_escalonamento, d.data_escalonamento, d.atendeu_prazos_report,
+                        d.populacao, d.data_submissao_cep, d.data_finalizacao,
+                        d.criado_por_nome, d.criado_por_email, d.atualizado_por, d.data_atualizacao,
+                        e.codigo AS estudo_codigo, e.nome AS estudo_nome
+                    FROM desvios d
+                    INNER JOIN estudos e ON d.estudo_id = e.id
+                    WHERE d.deleted_at IS NULL
+                """
+                params = []
+
+                if filtros.get('estudos'):
+                    placeholders = ', '.join(['%s'] * len(filtros['estudos']))
+                    query += f" AND e.codigo IN ({placeholders})"
+                    params.extend(filtros['estudos'])
+
+                if filtros.get('centros'):
+                    placeholders = ', '.join(['%s'] * len(filtros['centros']))
+                    query += f" AND d.centro IN ({placeholders})"
+                    params.extend(filtros['centros'])
+
+                if filtros.get('categorias'):
+                    placeholders = ', '.join(['%s'] * len(filtros['categorias']))
+                    query += f" AND d.categoria IN ({placeholders})"
+                    params.extend(filtros['categorias'])
+
+                if filtros.get('escopos'):
+                    placeholders = ', '.join(['%s'] * len(filtros['escopos']))
+                    query += f" AND d.escopo IN ({placeholders})"
+                    params.extend(filtros['escopos'])
+
+                if filtros.get('recorrencias'):
+                    placeholders = ', '.join(['%s'] * len(filtros['recorrencias']))
+                    query += f" AND d.recorrencia IN ({placeholders})"
+                    params.extend(filtros['recorrencias'])
+
+                if filtros.get('prazos'):
+                    placeholders = ', '.join(['%s'] * len(filtros['prazos']))
+                    query += f" AND d.prazo_escalonamento IN ({placeholders})"
+                    params.extend(filtros['prazos'])
+
+                if filtros.get('populacoes'):
+                    placeholders = ', '.join(['%s'] * len(filtros['populacoes']))
+                    query += f" AND d.populacao IN ({placeholders})"
+                    params.extend(filtros['populacoes'])
+
+                if filtros.get('criadores'):
+                    placeholders = ', '.join(['%s'] * len(filtros['criadores']))
+                    query += f" AND d.criado_por_nome IN ({placeholders})"
+                    params.extend(filtros['criadores'])
+
+                if filtros.get('data_inicio'):
+                    query += " AND d.data_ocorrido >= %s"
+                    params.append(filtros['data_inicio'])
+
+                if filtros.get('data_fim'):
+                    query += " AND d.data_ocorrido <= %s"
+                    params.append(filtros['data_fim'])
+
+                query += " ORDER BY d.id DESC"
+
+                df = pd.read_sql_query(query, conn, params=params if params else None)
+                conn.close()
+                return df
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {e}")
+                return pd.DataFrame()
+
+        # Carregar opções para os filtros
+        opcoes = load_opcoes_filtros()
+
+        # ====== SEÇÃO DE FILTROS ======
+        st.markdown("### 🔍 Filtros")
+        st.caption("Selecione os filtros desejados e clique em 'Gerar Relatório'. Você pode usar um ou mais filtros.")
+
+        # Inicializar estado dos filtros
+        if 'filtros_desvios' not in st.session_state:
+            st.session_state.filtros_desvios = {}
+
+        # Filtros em expanders
+        with st.expander("📚 Filtrar por Estudo", expanded=False):
+            estudos_sel = st.multiselect("Selecione o(s) estudo(s):", options=opcoes.get('estudos', []), key="rel_estudo")
+
+        with st.expander("🏥 Filtrar por Centro", expanded=False):
+            centros_sel = st.multiselect("Selecione o(s) centro(s):", options=opcoes.get('centros', []), key="rel_centro")
+
+        with st.expander("📁 Filtrar por Categoria", expanded=False):
+            categorias_sel = st.multiselect("Selecione a(s) categoria(s):", options=opcoes.get('categorias', []), key="rel_categoria")
+
+        with st.expander("🎯 Filtrar por Escopo", expanded=False):
+            escopos_sel = st.multiselect("Selecione o(s) escopo(s):", options=opcoes.get('escopos', []), key="rel_escopo")
+
+        with st.expander("🔁 Filtrar por Recorrência", expanded=False):
+            recorrencias_sel = st.multiselect("Selecione a(s) recorrência(s):", options=opcoes.get('recorrencias', []), key="rel_recorrencia")
+
+        with st.expander("⏰ Filtrar por Prazo de Escalonamento", expanded=False):
+            prazos_sel = st.multiselect("Selecione o(s) prazo(s):", options=opcoes.get('prazos', []), key="rel_prazo")
+
+        with st.expander("👥 Filtrar por População", expanded=False):
+            populacoes_sel = st.multiselect("Selecione a(s) população(ões):", options=opcoes.get('populacoes', []), key="rel_populacao")
+
+        with st.expander("👤 Filtrar por Criado Por", expanded=False):
+            criadores_sel = st.multiselect("Selecione o(s) criador(es):", options=opcoes.get('criadores', []), key="rel_criador")
+
+        with st.expander("📅 Filtrar por Período", expanded=False):
+            col_dt1, col_dt2 = st.columns(2)
+            with col_dt1:
+                data_inicio = st.date_input("Data inicial:", value=None, key="rel_data_ini")
+            with col_dt2:
+                data_fim = st.date_input("Data final:", value=None, key="rel_data_fim")
+
+        st.write("")
+
+        # Botão para gerar relatório
+        col_btn, col_empty = st.columns([1, 3])
+        with col_btn:
+            gerar_rel = st.button("📊 Gerar Relatório", type="primary", use_container_width=True)
+
+        st.divider()
+
+        # ====== RESULTADOS ======
+        if gerar_rel:
+            # Montar filtros
+            filtros = {
+                'estudos': estudos_sel if estudos_sel else None,
+                'centros': centros_sel if centros_sel else None,
+                'categorias': categorias_sel if categorias_sel else None,
+                'escopos': escopos_sel if escopos_sel else None,
+                'recorrencias': recorrencias_sel if recorrencias_sel else None,
+                'prazos': prazos_sel if prazos_sel else None,
+                'populacoes': populacoes_sel if populacoes_sel else None,
+                'criadores': criadores_sel if criadores_sel else None,
+                'data_inicio': data_inicio if data_inicio else None,
+                'data_fim': data_fim if data_fim else None,
+            }
+
+            with st.spinner("Gerando relatório..."):
+                df_resultado = gerar_relatorio_desvios(filtros)
+
+            st.session_state['df_relatorio_desvios'] = df_resultado
+
+        # Exibir resultados se existirem
+        if 'df_relatorio_desvios' in st.session_state and not st.session_state['df_relatorio_desvios'].empty:
+            df_resultado = st.session_state['df_relatorio_desvios']
+
+            st.markdown("### 📊 Resultados")
+
+            # Métricas resumidas
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                st.metric("Total de Desvios", len(df_resultado))
+            with col_m2:
+                st.metric("Estudos", df_resultado['estudo_codigo'].nunique())
+            with col_m3:
+                st.metric("Centros", df_resultado['centro'].nunique())
+            with col_m4:
+                st.metric("Criadores", df_resultado['criado_por_nome'].nunique())
+
+            st.write("")
+
+            # Configurar colunas - mostrar nomes amigáveis
+            with st.expander("⚙️ Configurar colunas exibidas", expanded=False):
+                colunas_disponiveis = df_resultado.columns.tolist()
+                # Criar opções com nomes amigáveis
+                opcoes_colunas = {MAPEAMENTO_COLUNAS_DESVIOS.get(col, col): col for col in colunas_disponiveis}
+
+                colunas_padrao_banco = ['estudo_codigo', 'numero_desvio_estudo', 'status', 'participante',
+                                'data_ocorrido', 'centro', 'categoria', 'subcategoria', 'importancia',
+                                'recorrencia', 'escopo', 'criado_por_nome']
+                colunas_padrao_banco = [c for c in colunas_padrao_banco if c in colunas_disponiveis]
+                colunas_padrao_amigaveis = [MAPEAMENTO_COLUNAS_DESVIOS.get(c, c) for c in colunas_padrao_banco]
+
+                colunas_selecionadas_amigaveis = st.multiselect(
+                    "Selecione as colunas:",
+                    options=list(opcoes_colunas.keys()),
+                    default=colunas_padrao_amigaveis,
+                    key="rel_colunas_exibir"
+                )
+
+            if not colunas_selecionadas_amigaveis:
+                colunas_selecionadas_amigaveis = colunas_padrao_amigaveis
+
+            # Converter nomes amigáveis de volta para nomes do banco
+            colunas_selecionadas_banco = [opcoes_colunas[col] for col in colunas_selecionadas_amigaveis]
+
+            # Renomear colunas para exibição
+            df_exibir = renomear_colunas(df_resultado[colunas_selecionadas_banco], MAPEAMENTO_COLUNAS_DESVIOS)
+
+            # Exibir dados
+            st.dataframe(df_exibir, use_container_width=True, height=400)
+
+            st.write("")
+
+            # Exportação - já com nomes amigáveis
+            st.markdown("### 📥 Exportar Dados")
+            col_exp1, col_exp2 = st.columns(2)
+
+            with col_exp1:
+                csv_data = df_exibir.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📄 Baixar CSV",
+                    data=csv_data,
+                    file_name=f"relatorio_desvios_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with col_exp2:
+                from io import BytesIO
+                buffer = BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_exibir.to_excel(writer, index=False, sheet_name='Desvios')
+                excel_data = buffer.getvalue()
+
+                st.download_button(
+                    label="📊 Baixar Excel",
+                    data=excel_data,
+                    file_name=f"relatorio_desvios_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+        elif 'df_relatorio_desvios' in st.session_state and st.session_state['df_relatorio_desvios'].empty:
+            st.warning("Nenhum registro encontrado com os filtros selecionados.")
+
+    # ===================================================================
+    # TAB 2: LOGS DE AUDITORIA
+    # ===================================================================
+    with tab_logs:
+        st.write("Visualize e exporte os logs de alterações dos desvios.")
+
+        # Função para carregar opções de filtros de logs
+        @st.cache_data(ttl=300)
+        def load_opcoes_filtros_logs():
+            try:
+                conn = get_connection()
+                opcoes = {}
+
+                # Usuários que fizeram alterações
+                df_usuarios = pd.read_sql_query("SELECT DISTINCT usuario FROM desvios_log WHERE usuario IS NOT NULL ORDER BY usuario", conn)
+                opcoes['usuarios'] = df_usuarios['usuario'].tolist()
+
+                # Campos alterados
+                df_campos = pd.read_sql_query("SELECT DISTINCT campo FROM desvios_log WHERE campo IS NOT NULL ORDER BY campo", conn)
+                opcoes['campos'] = df_campos['campo'].tolist()
+
+                # Estudos (via join)
+                df_estudos = pd.read_sql_query("""
+                    SELECT DISTINCT e.codigo
+                    FROM desvios_log l
+                    INNER JOIN estudos e ON l.estudo_id = e.id
+                    ORDER BY e.codigo
+                """, conn)
+                opcoes['estudos'] = df_estudos['codigo'].tolist()
+
+                conn.close()
+                return opcoes
+            except Exception as e:
+                st.error(f"Erro ao carregar opções de logs: {e}")
+                return {}
+
+        # Função para gerar relatório de logs
+        def gerar_relatorio_logs(filtros: dict) -> pd.DataFrame:
+            try:
+                conn = get_connection()
+                query = """
+                    SELECT
+                        l.id,
+                        l.desvio_id,
+                        e.codigo AS estudo_codigo,
+                        l.usuario,
+                        l.campo,
+                        l.valor_antigo,
+                        l.valor_novo,
+                        l.data_alteracao
+                    FROM desvios_log l
+                    INNER JOIN estudos e ON l.estudo_id = e.id
+                    WHERE 1=1
+                """
+                params = []
+
+                if filtros.get('estudos'):
+                    placeholders = ', '.join(['%s'] * len(filtros['estudos']))
+                    query += f" AND e.codigo IN ({placeholders})"
+                    params.extend(filtros['estudos'])
+
+                if filtros.get('usuarios'):
+                    placeholders = ', '.join(['%s'] * len(filtros['usuarios']))
+                    query += f" AND l.usuario IN ({placeholders})"
+                    params.extend(filtros['usuarios'])
+
+                if filtros.get('campos'):
+                    placeholders = ', '.join(['%s'] * len(filtros['campos']))
+                    query += f" AND l.campo IN ({placeholders})"
+                    params.extend(filtros['campos'])
+
+                if filtros.get('desvio_id'):
+                    query += " AND l.desvio_id = %s"
+                    params.append(filtros['desvio_id'])
+
+                if filtros.get('data_inicio'):
+                    query += " AND l.data_alteracao >= %s"
+                    params.append(filtros['data_inicio'])
+
+                if filtros.get('data_fim'):
+                    query += " AND l.data_alteracao <= %s"
+                    params.append(str(filtros['data_fim']) + ' 23:59:59')
+
+                query += " ORDER BY l.data_alteracao DESC"
+
+                df = pd.read_sql_query(query, conn, params=params if params else None)
+                conn.close()
+                return df
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório de logs: {e}")
+                return pd.DataFrame()
+
+        # Carregar opções
+        opcoes_logs = load_opcoes_filtros_logs()
+
+        # Criar mapeamento de campos para exibição amigável no filtro
+        campos_banco = opcoes_logs.get('campos', [])
+        campos_amigaveis_para_banco = {MAPEAMENTO_NOME_CAMPO_LOG.get(c, c): c for c in campos_banco}
+        campos_amigaveis = list(campos_amigaveis_para_banco.keys())
+
+        # ====== FILTROS DE LOGS ======
+        st.markdown("### 🔍 Filtros")
+        st.caption("Selecione os filtros desejados e clique em 'Gerar Relatório de Logs'.")
+
+        with st.expander("📚 Filtrar por Estudo", expanded=False):
+            log_estudos_sel = st.multiselect("Selecione o(s) estudo(s):", options=opcoes_logs.get('estudos', []), key="log_estudo")
+
+        with st.expander("👤 Filtrar por Usuário", expanded=False):
+            log_usuarios_sel = st.multiselect("Selecione o(s) usuário(s):", options=opcoes_logs.get('usuarios', []), key="log_usuario")
+
+        with st.expander("📝 Filtrar por Campo Alterado", expanded=False):
+            log_campos_amigaveis_sel = st.multiselect("Selecione o(s) campo(s):", options=campos_amigaveis, key="log_campo")
+            # Converter de volta para nomes do banco
+            log_campos_sel = [campos_amigaveis_para_banco[c] for c in log_campos_amigaveis_sel] if log_campos_amigaveis_sel else []
+
+        with st.expander("🔢 Filtrar por ID do Desvio", expanded=False):
+            log_desvio_id = st.number_input("ID do Desvio:", min_value=0, value=0, step=1, key="log_desvio_id")
+
+        with st.expander("📅 Filtrar por Período", expanded=False):
+            col_dt1, col_dt2 = st.columns(2)
+            with col_dt1:
+                log_data_inicio = st.date_input("Data inicial:", value=None, key="log_data_ini")
+            with col_dt2:
+                log_data_fim = st.date_input("Data final:", value=None, key="log_data_fim")
+
+        st.write("")
+
+        # Botão para gerar relatório de logs
+        col_btn_log, col_empty_log = st.columns([1, 3])
+        with col_btn_log:
+            gerar_log = st.button("📋 Gerar Relatório de Logs", type="primary", use_container_width=True)
+
+        st.divider()
+
+        # ====== RESULTADOS LOGS ======
+        if gerar_log:
+            filtros_log = {
+                'estudos': log_estudos_sel if log_estudos_sel else None,
+                'usuarios': log_usuarios_sel if log_usuarios_sel else None,
+                'campos': log_campos_sel if log_campos_sel else None,
+                'desvio_id': log_desvio_id if log_desvio_id > 0 else None,
+                'data_inicio': log_data_inicio if log_data_inicio else None,
+                'data_fim': log_data_fim if log_data_fim else None,
+            }
+
+            with st.spinner("Gerando relatório de logs..."):
+                df_logs = gerar_relatorio_logs(filtros_log)
+
+            st.session_state['df_relatorio_logs'] = df_logs
+
+        # Exibir resultados de logs
+        if 'df_relatorio_logs' in st.session_state and not st.session_state['df_relatorio_logs'].empty:
+            df_logs = st.session_state['df_relatorio_logs'].copy()
+
+            st.markdown("### 📋 Resultados - Logs de Auditoria")
+
+            # Métricas
+            col_l1, col_l2, col_l3 = st.columns(3)
+            with col_l1:
+                st.metric("Total de Registros", len(df_logs))
+            with col_l2:
+                st.metric("Usuários", df_logs['usuario'].nunique())
+            with col_l3:
+                st.metric("Desvios Alterados", df_logs['desvio_id'].nunique())
+
+            st.write("")
+
+            # Traduzir nomes dos campos e renomear colunas
+            df_logs_exibir = traduzir_campo_log(df_logs)
+            df_logs_exibir = renomear_colunas(df_logs_exibir, MAPEAMENTO_COLUNAS_LOGS)
+
+            # Exibir dados
+            st.dataframe(df_logs_exibir, use_container_width=True, height=400)
+
+            st.write("")
+
+            # Exportação - já com nomes amigáveis
+            st.markdown("### 📥 Exportar Logs")
+            col_exp1, col_exp2 = st.columns(2)
+
+            with col_exp1:
+                csv_logs = df_logs_exibir.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📄 Baixar CSV",
+                    data=csv_logs,
+                    file_name=f"logs_auditoria_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with col_exp2:
+                from io import BytesIO
+                buffer_log = BytesIO()
+                with pd.ExcelWriter(buffer_log, engine='openpyxl') as writer:
+                    df_logs_exibir.to_excel(writer, index=False, sheet_name='Logs')
+                excel_logs = buffer_log.getvalue()
+
+                st.download_button(
+                    label="📊 Baixar Excel",
+                    data=excel_logs,
+                    file_name=f"logs_auditoria_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+        elif 'df_relatorio_logs' in st.session_state and st.session_state['df_relatorio_logs'].empty:
+            st.warning("Nenhum log encontrado com os filtros selecionados.")
 
 
 # -------------------------------------------------
